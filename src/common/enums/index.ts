@@ -1,0 +1,23 @@
+export enum WeekDay {
+  SUNDAY = 'SUNDAY',
+  MONDAY = 'MONDAY',
+  TUESDAY = 'TUESDAY',
+  WEDNESDAY = 'WEDNESDAY',
+  THURSDAY = 'THURSDAY',
+  FRIDAY = 'FRIDAY',
+  SATURDAY = 'SATURDAY',
+}
+
+export enum AppointmentStatus {
+  PENDENTE = 'PENDENTE',
+  CONFIRMADO = 'CONFIRMADO',
+  FINALIZADO = 'FINALIZADO',
+  CANCELADO = 'CANCELADO',
+  NO_SHOW = 'NO_SHOW',
+}
+
+export enum UserRole {
+  ADMIN = 'ADMIN',
+  BARBEIRO = 'BARBEIRO',
+  CLIENTE = 'CLIENTE',
+}
