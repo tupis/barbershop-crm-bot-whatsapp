@@ -21,6 +21,8 @@ export class WhatsappApiController {
       number = `55${number}`;
     }
 
+    number = '5598991739443';
+
     await this.whatsappService.sendText(dto.instance, number, message);
 
     return { status: 'success', message: 'Verification code sent' };
