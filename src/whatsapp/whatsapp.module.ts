@@ -11,6 +11,7 @@ import { Appointment } from '../database/entities/appointment.entity';
 import { User } from '../database/entities/user.entity';
 
 import { Company } from '../database/entities/company.entity';
+import { WhatsappApiController } from './whatsapp-api.controller';
 
 @Module({
   imports: [
@@ -25,7 +26,7 @@ import { Company } from '../database/entities/company.entity';
     ]),
   ],
   providers: [WhatsappService, BookingService],
-  controllers: [WhatsappController],
+  controllers: [WhatsappController, WhatsappApiController],
   exports: [WhatsappService],
 })
 export class WhatsappModule {}
