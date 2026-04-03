@@ -49,19 +49,6 @@ export class WhatsappService {
     try {
       const url = `${this.apiUrl}/message/sendList/${instance}`;
 
-      console.log(
-        url,
-        {
-          number,
-          title,
-          description,
-          buttonText,
-          footerText: 'Barbearia CRM',
-          sections,
-        },
-        { headers: this.headers },
-      );
-
       await axios.post(
         url,
         {

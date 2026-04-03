@@ -37,29 +37,37 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await this.client.del(key);
   }
 
-  // Conversation state helpers
   async getUserState(branchId: string, phone: string): Promise<any | null> {
     const data = await this.get(`bot:state:${branchId}:${phone}`);
     return data ? JSON.parse(data) : null;
   }
 
-  async setUserState(branchId: string, phone: string, state: any): Promise<void> {
-    // 1 hour TTL for active booking flow
-    await this.set(`bot:state:${branchId}:${phone}`, JSON.stringify(state), 3600);
+  async setUserState(
+    branchId: string,
+    phone: string,
+    state: any,
+  ): Promise<void> {
+    await this.set(
+      `bot:state:${branchId}:${phone}`,
+      JSON.stringify(state),
+      3600,
+    );
   }
 
   async clearUserState(branchId: string, phone: string): Promise<void> {
     await this.del(`bot:state:${branchId}:${phone}`);
   }
 
-  // History helpers
-  async appendHistory(branchId: string, phone: string, message: { role: 'user' | 'bot', content: string }): Promise<void> {
+  async appendHistory(
+    branchId: string,
+    phone: string,
+    message: { role: 'user' | 'bot'; content: string },
+  ): Promise<void> {
     const key = `bot:history:${branchId}:${phone}`;
     const historyJson = await this.get(key);
     const history = historyJson ? JSON.parse(historyJson) : [];
     history.push({ ...message, timestamp: new Date().toISOString() });
-    
-    // Keep last 20 messages, 24h TTL
+
     const trimmedHistory = history.slice(-20);
     await this.set(key, JSON.stringify(trimmedHistory), 86400);
   }

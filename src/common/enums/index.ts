@@ -11,13 +11,14 @@ export enum WeekDay {
 export enum AppointmentStatus {
   PENDENTE = 'PENDENTE',
   CONFIRMADO = 'CONFIRMADO',
-  FINALIZADO = 'FINALIZADO',
+  EM_ANDAMENTO = 'EM_ANDAMENTO',
+  CONCLUIDO = 'CONCLUIDO',
   CANCELADO = 'CANCELADO',
   NO_SHOW = 'NO_SHOW',
 }
 
 export enum UserRole {
   ADMIN = 'ADMIN',
-  BARBEIRO = 'BARBEIRO',
-  CLIENTE = 'CLIENTE',
+  BARBER = 'BARBER',
+  USER = 'USER',
 }

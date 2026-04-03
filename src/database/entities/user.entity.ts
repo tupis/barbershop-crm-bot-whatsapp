@@ -4,19 +4,25 @@ import { UserRole } from '../../common/enums';
 
 @Entity('users')
 export class User extends BaseEntity {
+  @Column({ nullable: true })
+  companyId: string;
+
   @Column()
   name: string;
 
-  @Column({ unique: true })
+  @Column({ unique: true, nullable: true })
   email: string;
 
-  @Column({ unique: true, nullable: true })
+  @Column({ unique: true })
   phone: string;
+
+  @Column({ nullable: true })
+  passwordHash: string;
 
   @Column({
     type: 'enum',
     enum: UserRole,
-    default: UserRole.CLIENTE,
+    default: UserRole.USER,
   })
   role: UserRole;
 

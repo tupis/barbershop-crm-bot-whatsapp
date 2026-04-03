@@ -10,6 +10,7 @@ import { User } from './database/entities/user.entity';
 import { Company } from './database/entities/company.entity';
 import { RedisModule } from './redis/redis.module';
 import { WhatsappModule } from './whatsapp/whatsapp.module';
+import { ApiModule } from './api/api.module';
 
 @Module({
   imports: [
@@ -49,6 +50,7 @@ import { WhatsappModule } from './whatsapp/whatsapp.module';
     ]),
     RedisModule,
     WhatsappModule,
+    ApiModule,
   ],
   controllers: [],
   providers: [],

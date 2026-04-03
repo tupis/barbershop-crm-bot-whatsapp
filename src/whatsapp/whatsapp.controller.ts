@@ -11,14 +11,13 @@ export class WhatsappController {
   async handleWebhook(@Body() payload: any) {
     this.logger.log(`Received webhook from Evolution API: ${payload.event}`);
 
-    // Evolution API sends 'messages.upsert' for new messages
     if (payload.event === 'messages.upsert') {
       const data = payload.data;
       const instance = payload.instance;
       const phone = data.key.remoteJid.split('@')[0];
       const isFromMe = data.key.fromMe;
 
-      if (isFromMe) return; // Ignore messages sent by the bot
+      if (isFromMe) return;
 
       const text =
         data.message?.conversation ||
