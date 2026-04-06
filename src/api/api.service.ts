@@ -5,16 +5,34 @@ import axios from 'axios';
 @Injectable()
 export class ApiService {
   private readonly logger = new Logger(ApiService.name);
-  private readonly apiUrl: string;
+  private readonly routerUrl: string;
+  private readonly tenantApiCache: Map<string, string> = new Map();
 
   constructor(private configService: ConfigService) {
-    this.apiUrl = this.configService.get<string>('BACKEND_API_URL') || '';
+    this.routerUrl = this.configService.get<string>('ROUTER_API_URL') || 'http://localhost:5700';
   }
 
-  async getCompanyBySlug(slug: string) {
+  private async getApiUrl(tenantSlug: string): Promise<string> {
+    if (this.tenantApiCache.has(tenantSlug)) {
+      return this.tenantApiCache.get(tenantSlug) as string;
+    }
     try {
+      const response = await axios.get(`${this.routerUrl}/api/resolve/instance/${tenantSlug}`);
+      const api = response.data.url_api;
+      this.tenantApiCache.set(tenantSlug, api);
+      return api;
+    } catch (e) {
+      this.logger.error(`Failed to resolve api url for tenant ${tenantSlug}`);
+      return this.configService.get<string>('BACKEND_API_URL') || 'http://localhost:5500';
+    }
+  }
+
+  async getCompanyBySlug(tenantSlug: string, slug: string) {
+    try {
+      const apiUrl = await this.getApiUrl(tenantSlug);
       const { data } = await axios.get(
-        `${this.apiUrl}/company/by-slug/${slug}`,
+        `${apiUrl}/company/by-slug/${slug}`,
+        { headers: { 'x-tenant-slug': tenantSlug } }
       );
       return data;
     } catch (error) {
@@ -23,9 +41,12 @@ export class ApiService {
     }
   }
 
-  async getBranches() {
+  async getBranches(tenantSlug: string) {
     try {
-      const { data } = await axios.get(`${this.apiUrl}/branches`);
+      const apiUrl = await this.getApiUrl(tenantSlug);
+      const { data } = await axios.get(`${apiUrl}/branches`, {
+        headers: { 'x-tenant-slug': tenantSlug }
+      });
       return (data || []).filter((b: any) => b.isActive);
     } catch (error) {
       this.logger.error(`Error fetching branches: ${error.message}`);
@@ -33,10 +54,12 @@ export class ApiService {
     }
   }
 
-  async getServices(branchId: string) {
+  async getServices(tenantSlug: string, branchId: string) {
     try {
-      const { data } = await axios.get(`${this.apiUrl}/cliente/services`, {
+      const apiUrl = await this.getApiUrl(tenantSlug);
+      const { data } = await axios.get(`${apiUrl}/cliente/services`, {
         params: { branchId },
+        headers: { 'x-tenant-slug': tenantSlug }
       });
       return data || [];
     } catch (error) {
@@ -45,10 +68,12 @@ export class ApiService {
     }
   }
 
-  async getBarbers(branchId: string) {
+  async getBarbers(tenantSlug: string, branchId: string) {
     try {
-      const { data } = await axios.get(`${this.apiUrl}/cliente/barbers`, {
+      const apiUrl = await this.getApiUrl(tenantSlug);
+      const { data } = await axios.get(`${apiUrl}/cliente/barbers`, {
         params: { branchId },
+        headers: { 'x-tenant-slug': tenantSlug }
       });
       return data || [];
     } catch (error) {
@@ -57,12 +82,14 @@ export class ApiService {
     }
   }
 
-  async getAvailableSlots(barberId: string, date: string) {
+  async getAvailableSlots(tenantSlug: string, barberId: string, date: string) {
     try {
+      const apiUrl = await this.getApiUrl(tenantSlug);
       const { data } = await axios.get(
-        `${this.apiUrl}/cliente/barbers/${barberId}/slots`,
+        `${apiUrl}/cliente/barbers/${barberId}/slots`,
         {
           params: { date },
+          headers: { 'x-tenant-slug': tenantSlug }
         },
       );
       return (data || [])
@@ -74,14 +101,16 @@ export class ApiService {
     }
   }
 
-  async findOrCreateUser(phone: string, name: string) {
+  async findOrCreateUser(tenantSlug: string, phone: string, name: string) {
     try {
+      const apiUrl = await this.getApiUrl(tenantSlug);
       const { data } = await axios.post(
-        `${this.apiUrl}/cliente/users/find-or-create`,
+        `${apiUrl}/cliente/users/find-or-create`,
         {
           phone,
           name,
         },
+        { headers: { 'x-tenant-slug': tenantSlug } }
       );
       return data;
     } catch (error) {
@@ -90,11 +119,13 @@ export class ApiService {
     }
   }
 
-  async createAppointment(payload: any) {
+  async createAppointment(tenantSlug: string, payload: any) {
     try {
+      const apiUrl = await this.getApiUrl(tenantSlug);
       const { data } = await axios.post(
-        `${this.apiUrl}/cliente/appointments`,
+        `${apiUrl}/cliente/appointments`,
         payload,
+        { headers: { 'x-tenant-slug': tenantSlug } }
       );
       return data;
     } catch (error) {

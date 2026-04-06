@@ -31,7 +31,7 @@ export class BookingService {
     text: string,
     selectedRowId?: string,
   ) {
-    const company = await this.apiService.getCompanyBySlug(instance);
+    const company = await this.apiService.getCompanyBySlug(instance, instance);
 
     if (!company) {
       this.logger.error(`Company not found for instance: ${instance}`);
@@ -225,7 +225,7 @@ export class BookingService {
     state: any,
     customText?: string,
   ) {
-    const branches = await this.apiService.getBranches();
+    const branches = await this.apiService.getBranches(instance);
 
     const options = branches.map((b: any) => ({
       label: b.name,
@@ -250,7 +250,7 @@ export class BookingService {
     state: any,
     customText?: string,
   ) {
-    const services = await this.apiService.getServices(branchId);
+    const services = await this.apiService.getServices(instance, branchId);
 
     const options = services.map((s: any) => ({
       label: `${s.name} - R$ ${s.price}`,
@@ -275,7 +275,7 @@ export class BookingService {
     state: any,
     customText?: string,
   ) {
-    const barbers = await this.apiService.getBarbers(branchId);
+    const barbers = await this.apiService.getBarbers(instance, branchId);
 
     const compatibleBarbers = barbers.filter((b: any) =>
       serviceIds.every((sid) => b.serviceIds?.includes(sid)),
@@ -325,7 +325,7 @@ export class BookingService {
     date: string,
     state: any,
   ) {
-    const slots = await this.apiService.getAvailableSlots(barberId, date);
+    const slots = await this.apiService.getAvailableSlots(instance, barberId, date);
 
     const options = slots.map((s: string) => ({
       label: s,
@@ -343,12 +343,12 @@ export class BookingService {
   }
 
   private async sendConfirmation(instance: string, phone: string, state: any) {
-    const services = await this.apiService.getServices(state.selectedBranchId);
+    const services = await this.apiService.getServices(instance, state.selectedBranchId);
     const selectedServices = services.filter((s: any) =>
       state.selectedServices.includes(s.id),
     );
 
-    const barbers = await this.apiService.getBarbers(state.selectedBranchId);
+    const barbers = await this.apiService.getBarbers(instance, state.selectedBranchId);
     const barber = barbers.find((b: any) => b.id === state.selectedBarberId);
 
     const total = selectedServices.reduce(
@@ -385,6 +385,7 @@ export class BookingService {
       const phoneWithoutDDD = phone.replace('55', '');
 
       const user = await this.apiService.findOrCreateUser(
+        instance,
         phoneWithoutDDD,
         'Cliente WhatsApp',
       );
@@ -392,7 +393,7 @@ export class BookingService {
         throw new Error('Could not find or create user in backend');
       }
 
-      await this.apiService.createAppointment({
+      await this.apiService.createAppointment(instance, {
         clientId: user.id || user.uuid,
         barberId: state.selectedBarberId,
         branchId: state.selectedBranchId,
