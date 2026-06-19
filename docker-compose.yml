@@ -1,0 +1,13 @@
+services:
+  whatsapp-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: barbershop-bot-whatsapp
+    restart: always
+    ports:
+      - "${PORT:-5600}:${PORT:-5600}"
+    env_file:
+      - .env
+    environment:
+      - PORT=${PORT:-5600}
