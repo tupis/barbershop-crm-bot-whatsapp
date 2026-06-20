@@ -4,10 +4,6 @@ dist
 .gitignore
 .prettierrc
 eslint.config.mjs
-nest-cli.json
-pnpm-lock.yaml
-tsconfig.build.json
-tsconfig.json
 README.md
 test
 Dockerfile
