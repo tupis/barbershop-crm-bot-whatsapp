@@ -253,7 +253,7 @@ export class BookingService {
     const services = await this.apiService.getServices(instance, branchId);
 
     const options = services.map((s: any) => ({
-      label: `${s.name} - R$ ${s.price}`,
+      label: `${s.name} - R$ ${s.price / 100}`,
       rowId: `service_${s.id}`,
     }));
 
@@ -325,7 +325,11 @@ export class BookingService {
     date: string,
     state: any,
   ) {
-    const slots = await this.apiService.getAvailableSlots(instance, barberId, date);
+    const slots = await this.apiService.getAvailableSlots(
+      instance,
+      barberId,
+      date,
+    );
 
     const options = slots.map((s: string) => ({
       label: s,
@@ -343,12 +347,18 @@ export class BookingService {
   }
 
   private async sendConfirmation(instance: string, phone: string, state: any) {
-    const services = await this.apiService.getServices(instance, state.selectedBranchId);
+    const services = await this.apiService.getServices(
+      instance,
+      state.selectedBranchId,
+    );
     const selectedServices = services.filter((s: any) =>
       state.selectedServices.includes(s.id),
     );
 
-    const barbers = await this.apiService.getBarbers(instance, state.selectedBranchId);
+    const barbers = await this.apiService.getBarbers(
+      instance,
+      state.selectedBranchId,
+    );
     const barber = barbers.find((b: any) => b.id === state.selectedBarberId);
 
     const total = selectedServices.reduce(
