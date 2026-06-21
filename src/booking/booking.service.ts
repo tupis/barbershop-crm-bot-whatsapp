@@ -40,16 +40,6 @@ export class BookingService {
 
     const companyId = company.id || company.uuid;
 
-    if (text.toLowerCase() === 'reset' || text.toLowerCase() === 'sair') {
-      await this.redisService.clearUserState(companyId, phone);
-      await this.whatsappService.sendText(
-        instance,
-        phone,
-        'Agendamento cancelado. Digite algo para recomeçar.',
-      );
-      return;
-    }
-
     let state = await this.redisService.getUserState(companyId, phone);
 
     if (!state) {
@@ -61,6 +51,90 @@ export class BookingService {
       if (index >= 0 && index < state.availableOptions.length) {
         selectedRowId = state.availableOptions[index];
       }
+    }
+
+    const isReset =
+      selectedRowId === 'flow_reset' ||
+      text.toLowerCase() === 'reset' ||
+      text.toLowerCase() === 'sair' ||
+      text.toLowerCase() === 'reiniciar';
+
+    if (isReset) {
+      await this.redisService.clearUserState(companyId, phone);
+      await this.whatsappService.sendText(
+        instance,
+        phone,
+        'Agendamento cancelado. Digite algo para recomeçar.',
+      );
+      return;
+    }
+
+    const isBack =
+      selectedRowId === 'flow_back' ||
+      text.toLowerCase() === 'voltar';
+
+    if (isBack && state.step !== BookingState.IDLE) {
+      switch (state.step) {
+        case BookingState.SELECTING_UNIT:
+          await this.redisService.clearUserState(companyId, phone);
+          await this.whatsappService.sendText(
+            instance,
+            phone,
+            'Agendamento cancelado. Digite algo para recomeçar.',
+          );
+          return;
+
+        case BookingState.SELECTING_SERVICES:
+          state.selectedBranchId = undefined;
+          await this.sendUnitSelection(instance, phone, company, state);
+          state.step = BookingState.SELECTING_UNIT;
+          break;
+
+        case BookingState.SELECTING_BARBER:
+          state.selectedServices = [];
+          await this.sendServiceSelection(
+            instance,
+            phone,
+            state.selectedBranchId,
+            state,
+          );
+          state.step = BookingState.SELECTING_SERVICES;
+          break;
+
+        case BookingState.SELECTING_DATE:
+          state.selectedBarberId = undefined;
+          await this.sendBarberSelection(
+            instance,
+            phone,
+            state.selectedBranchId,
+            state.selectedServices,
+            state,
+          );
+          state.step = BookingState.SELECTING_BARBER;
+          break;
+
+        case BookingState.SELECTING_TIME:
+          state.selectedDate = undefined;
+          await this.sendDateSelection(instance, phone, state);
+          state.step = BookingState.SELECTING_DATE;
+          break;
+
+        case BookingState.CONFIRMING:
+          state.selectedTime = undefined;
+          await this.sendTimeSelection(
+            instance,
+            phone,
+            state.selectedBarberId,
+            state.selectedDate,
+            state,
+          );
+          state.step = BookingState.SELECTING_TIME;
+          break;
+      }
+      if (state) {
+        await this.redisService.setUserState(companyId, phone, state);
+      }
+      return;
     }
 
     await this.redisService.appendHistory(companyId, phone, {
@@ -207,13 +281,23 @@ export class BookingService {
     options: { label: string; rowId: string }[],
     state: any,
   ) {
+    const menuOptions = [...options];
+    menuOptions.push({
+      label: '↩️ Voltar para o passo anterior',
+      rowId: 'flow_back',
+    });
+    menuOptions.push({
+      label: '🔄 Reiniciar atendimento',
+      rowId: 'flow_reset',
+    });
+
     let menuText = `*${title}*\n\n${text}\n\n`;
-    options.forEach((opt, i) => {
+    menuOptions.forEach((opt, i) => {
       menuText += `${i + 1}. ${opt.label}\n`;
     });
     menuText += `\n_Digite o número da opção desejada_`;
 
-    state.availableOptions = options.map((opt) => opt.rowId);
+    state.availableOptions = menuOptions.map((opt) => opt.rowId);
 
     await this.whatsappService.sendText(instance, phone, menuText);
   }
