@@ -9,9 +9,13 @@ export enum BookingState {
   IDLE = 'IDLE',
   SELECTING_UNIT = 'SELECTING_UNIT',
   SELECTING_SERVICES = 'SELECTING_SERVICES',
+  CHOSING_BARBER_MODE = 'CHOSING_BARBER_MODE',
+  SELECTING_BARBER_FOR_SERVICE = 'SELECTING_BARBER_FOR_SERVICE',
   SELECTING_BARBER = 'SELECTING_BARBER',
   SELECTING_DATE = 'SELECTING_DATE',
   SELECTING_TIME = 'SELECTING_TIME',
+  ASKING_NAME = 'ASKING_NAME',
+  ASKING_EMAIL = 'ASKING_EMAIL',
   CONFIRMING = 'CONFIRMING',
 }
 
@@ -90,8 +94,7 @@ export class BookingService {
           state.step = BookingState.SELECTING_UNIT;
           break;
 
-        case BookingState.SELECTING_BARBER:
-          state.selectedServices = [];
+        case BookingState.CHOSING_BARBER_MODE:
           await this.sendServiceSelection(
             instance,
             phone,
@@ -101,16 +104,64 @@ export class BookingService {
           state.step = BookingState.SELECTING_SERVICES;
           break;
 
+        case BookingState.SELECTING_BARBER_FOR_SERVICE:
+          if (state.currentServiceBarberIndex > 0) {
+            state.currentServiceBarberIndex -= 1;
+            const currentServiceId = state.selectedServices[state.currentServiceBarberIndex];
+            if (state.serviceBarberIds) {
+              delete state.serviceBarberIds[currentServiceId];
+            }
+            await this.sendNextServiceBarberSelection(instance, phone, state);
+          } else {
+            delete state.currentServiceBarberIndex;
+            state.serviceBarberIds = {};
+            await this.sendBarberModeSelection(instance, phone, state);
+            state.step = BookingState.CHOSING_BARBER_MODE;
+          }
+          break;
+
+        case BookingState.SELECTING_BARBER:
+          state.selectedBarberId = undefined;
+          state.serviceBarberIds = {};
+          if (company.enableMultiBarber && state.selectedServices.length > 1) {
+            await this.sendBarberModeSelection(instance, phone, state);
+            state.step = BookingState.CHOSING_BARBER_MODE;
+          } else {
+            await this.sendServiceSelection(
+              instance,
+              phone,
+              state.selectedBranchId,
+              state,
+            );
+            state.step = BookingState.SELECTING_SERVICES;
+          }
+          break;
+
         case BookingState.SELECTING_DATE:
           state.selectedBarberId = undefined;
-          await this.sendBarberSelection(
-            instance,
-            phone,
-            state.selectedBranchId,
-            state.selectedServices,
-            state,
-          );
-          state.step = BookingState.SELECTING_BARBER;
+          if (
+            company.enableMultiBarber &&
+            state.selectedServices.length > 1 &&
+            state.isSeparateBarberMode
+          ) {
+            state.currentServiceBarberIndex = state.selectedServices.length - 1;
+            const lastServiceId = state.selectedServices[state.currentServiceBarberIndex];
+            if (state.serviceBarberIds) {
+              delete state.serviceBarberIds[lastServiceId];
+            }
+            await this.sendNextServiceBarberSelection(instance, phone, state);
+            state.step = BookingState.SELECTING_BARBER_FOR_SERVICE;
+          } else {
+            state.serviceBarberIds = {};
+            await this.sendBarberSelection(
+              instance,
+              phone,
+              state.selectedBranchId,
+              state.selectedServices,
+              state,
+            );
+            state.step = BookingState.SELECTING_BARBER;
+          }
           break;
 
         case BookingState.SELECTING_TIME:
@@ -119,8 +170,9 @@ export class BookingService {
           state.step = BookingState.SELECTING_DATE;
           break;
 
-        case BookingState.CONFIRMING:
+        case BookingState.ASKING_NAME:
           state.selectedTime = undefined;
+          state.tempName = undefined;
           await this.sendTimeSelection(
             instance,
             phone,
@@ -129,6 +181,38 @@ export class BookingService {
             state,
           );
           state.step = BookingState.SELECTING_TIME;
+          break;
+
+        case BookingState.ASKING_EMAIL:
+          state.tempName = undefined;
+          await this.whatsappService.sendText(
+            instance,
+            phone,
+            'Por favor, digite o seu nome completo:',
+          );
+          state.step = BookingState.ASKING_NAME;
+          break;
+
+        case BookingState.CONFIRMING:
+          if (state.tempEmail) {
+            state.tempEmail = undefined;
+            await this.whatsappService.sendText(
+              instance,
+              phone,
+              'Por favor, digite o seu e-mail:',
+            );
+            state.step = BookingState.ASKING_EMAIL;
+          } else {
+            state.selectedTime = undefined;
+            await this.sendTimeSelection(
+              instance,
+              phone,
+              state.selectedBarberId,
+              state.selectedDate,
+              state,
+            );
+            state.step = BookingState.SELECTING_TIME;
+          }
           break;
       }
       if (state) {
@@ -171,16 +255,48 @@ export class BookingService {
 
       case BookingState.SELECTING_SERVICES:
         if (selectedRowId) {
-          const serviceId = selectedRowId.replace('service_', '');
-          state.selectedServices = [serviceId];
-          await this.sendBarberSelection(
-            instance,
-            phone,
-            state.selectedBranchId,
-            state.selectedServices,
-            state,
-          );
-          state.step = BookingState.SELECTING_BARBER;
+          if (selectedRowId === 'confirm_services') {
+            if (state.selectedServices && state.selectedServices.length > 0) {
+              if (company.enableMultiBarber && state.selectedServices.length > 1) {
+                await this.sendBarberModeSelection(instance, phone, state);
+                state.step = BookingState.CHOSING_BARBER_MODE;
+              } else {
+                await this.sendBarberSelection(
+                  instance,
+                  phone,
+                  state.selectedBranchId,
+                  state.selectedServices,
+                  state,
+                );
+                state.step = BookingState.SELECTING_BARBER;
+              }
+            } else {
+              await this.sendServiceSelection(
+                instance,
+                phone,
+                state.selectedBranchId,
+                state,
+                'Por favor, selecione pelo menos um serviço:',
+              );
+            }
+          } else if (selectedRowId.startsWith('service_')) {
+            const serviceId = selectedRowId.replace('service_', '');
+            if (!state.selectedServices) {
+              state.selectedServices = [];
+            }
+            const idx = state.selectedServices.indexOf(serviceId);
+            if (idx > -1) {
+              state.selectedServices.splice(idx, 1);
+            } else {
+              state.selectedServices.push(serviceId);
+            }
+            await this.sendServiceSelection(
+              instance,
+              phone,
+              state.selectedBranchId,
+              state,
+            );
+          }
         } else {
           await this.sendServiceSelection(
             instance,
@@ -192,9 +308,58 @@ export class BookingService {
         }
         break;
 
+      case BookingState.CHOSING_BARBER_MODE:
+        if (selectedRowId === 'barber_mode_single') {
+          state.isSeparateBarberMode = false;
+          await this.sendBarberSelection(
+            instance,
+            phone,
+            state.selectedBranchId,
+            state.selectedServices,
+            state,
+          );
+          state.step = BookingState.SELECTING_BARBER;
+        } else if (selectedRowId === 'barber_mode_multi') {
+          state.isSeparateBarberMode = true;
+          state.currentServiceBarberIndex = 0;
+          state.serviceBarberIds = {};
+          await this.sendNextServiceBarberSelection(instance, phone, state);
+          state.step = BookingState.SELECTING_BARBER_FOR_SERVICE;
+        } else {
+          await this.sendBarberModeSelection(instance, phone, state);
+        }
+        break;
+
+      case BookingState.SELECTING_BARBER_FOR_SERVICE:
+        if (selectedRowId && selectedRowId.startsWith('barber_')) {
+          const barberId = selectedRowId.replace('barber_', '');
+          const serviceId = state.selectedServices[state.currentServiceBarberIndex];
+          if (!state.serviceBarberIds) {
+            state.serviceBarberIds = {};
+          }
+          state.serviceBarberIds[serviceId] = barberId;
+
+          state.currentServiceBarberIndex += 1;
+          if (state.currentServiceBarberIndex < state.selectedServices.length) {
+            await this.sendNextServiceBarberSelection(instance, phone, state);
+          } else {
+            state.selectedBarberId = state.serviceBarberIds[state.selectedServices[0]];
+            delete state.currentServiceBarberIndex;
+            await this.sendDateSelection(instance, phone, state);
+            state.step = BookingState.SELECTING_DATE;
+          }
+        } else {
+          await this.sendNextServiceBarberSelection(instance, phone, state);
+        }
+        break;
+
       case BookingState.SELECTING_BARBER:
-        if (selectedRowId) {
+        if (selectedRowId && selectedRowId.startsWith('barber_')) {
           state.selectedBarberId = selectedRowId.replace('barber_', '');
+          state.serviceBarberIds = {};
+          state.selectedServices.forEach((sid: string) => {
+            state.serviceBarberIds[sid] = state.selectedBarberId;
+          });
           await this.sendDateSelection(instance, phone, state);
           state.step = BookingState.SELECTING_DATE;
         } else {
@@ -228,8 +393,33 @@ export class BookingService {
       case BookingState.SELECTING_TIME:
         if (selectedRowId) {
           state.selectedTime = selectedRowId.replace('time_', '');
-          await this.sendConfirmation(instance, phone, state);
-          state.step = BookingState.CONFIRMING;
+
+          const phoneWithoutDDD = phone.replace('55', '');
+          const user = await this.apiService.findOrCreateUser(
+            instance,
+            phoneWithoutDDD,
+            'Cliente WhatsApp',
+          );
+          if (user) {
+            state.customerId = user.id || user.uuid;
+            if (
+              user.name === 'Cliente WhatsApp' &&
+              user.email?.includes('@temp.com')
+            ) {
+              await this.whatsappService.sendText(
+                instance,
+                phone,
+                'Percebi que é seu primeiro agendamento conosco! Para começarmos, digite o seu nome completo:',
+              );
+              state.step = BookingState.ASKING_NAME;
+            } else {
+              await this.sendConfirmation(instance, phone, state);
+              state.step = BookingState.CONFIRMING;
+            }
+          } else {
+            await this.sendConfirmation(instance, phone, state);
+            state.step = BookingState.CONFIRMING;
+          }
         } else {
           await this.sendTimeSelection(
             instance,
@@ -238,6 +428,37 @@ export class BookingService {
             state.selectedDate,
             state,
           );
+        }
+        break;
+
+      case BookingState.ASKING_NAME:
+        state.tempName = text.trim();
+        await this.whatsappService.sendText(
+          instance,
+          phone,
+          `Obrigado, ${state.tempName}! Agora, por favor, digite o seu e-mail:`,
+        );
+        state.step = BookingState.ASKING_EMAIL;
+        break;
+
+      case BookingState.ASKING_EMAIL:
+        const email = text.trim();
+        if (!email.includes('@') || !email.includes('.')) {
+          await this.whatsappService.sendText(
+            instance,
+            phone,
+            'E-mail inválido. Por favor, digite um e-mail válido (ex: seuemail@email.com):',
+          );
+        } else {
+          state.tempEmail = email;
+          const phoneWithoutDDD = phone.replace('55', '');
+          await this.apiService.updateCustomer(instance, state.customerId, {
+            name: state.tempName,
+            email: state.tempEmail,
+            phone: phoneWithoutDDD,
+          });
+          await this.sendConfirmation(instance, phone, state);
+          state.step = BookingState.CONFIRMING;
         }
         break;
 
@@ -250,6 +471,7 @@ export class BookingService {
         ) {
           await this.createAppointment(instance, phone, state);
           await this.redisService.clearUserState(companyId, phone);
+          return;
         } else if (
           text.toLowerCase().includes('não') ||
           text.toLowerCase() === 'cancelar' ||
@@ -262,6 +484,7 @@ export class BookingService {
             phone,
             'Agendamento cancelado. Digite algo para recomeçar.',
           );
+          return;
         } else {
           await this.sendConfirmation(instance, phone, state);
         }
@@ -336,16 +559,37 @@ export class BookingService {
   ) {
     const services = await this.apiService.getServices(instance, branchId);
 
-    const options = services.map((s: any) => ({
-      label: `${s.name} - R$ ${s.price / 100}`,
-      rowId: `service_${s.id}`,
-    }));
+    const options = services.map((s: any) => {
+      const isSelected = state.selectedServices?.includes(s.id);
+      return {
+        label: `${s.name} - R$ ${s.price / 100}${isSelected ? ' [Selecionado ✅]' : ''}`,
+        rowId: `service_${s.id}`,
+      };
+    });
+
+    if (state.selectedServices && state.selectedServices.length > 0) {
+      options.push({
+        label: '➡️ Avançar / Continuar',
+        rowId: 'confirm_services',
+      });
+    }
+
+    let descriptionText =
+      customText ||
+      `Ótimo! Agora escolha o serviço que deseja agendar (você pode selecionar vários):`;
+    if (state.selectedServices && state.selectedServices.length > 0) {
+      const selectedNames = services
+        .filter((s: any) => state.selectedServices.includes(s.id))
+        .map((s: any) => s.name)
+        .join(', ');
+      descriptionText = `*Selecionados atualmente:* ${selectedNames}\n\nDeseja adicionar mais algum serviço ou avançar?`;
+    }
 
     await this.sendMenu(
       instance,
       phone,
       'Escolha o Serviço',
-      customText || `Ótimo! Agora escolha o serviço que deseja agendar:`,
+      descriptionText,
       options,
       state,
     );
@@ -450,12 +694,25 @@ export class BookingService {
       0,
     );
 
+    let professionalLine = '';
+    const uniqueBarberIds = [...new Set(Object.values(state.serviceBarberIds || {}))];
+    if (uniqueBarberIds.length > 1) {
+      professionalLine = `👤 *Profissionais:* \n`;
+      selectedServices.forEach((s: any) => {
+        const bid = state.serviceBarberIds[s.id];
+        const b = barbers.find((x: any) => x.id === bid);
+        professionalLine += `  - ${s.name}: ${b?.name || 'Não selecionado'}\n`;
+      });
+    } else {
+      professionalLine = `👤 *Profissional:* ${barber?.name}\n`;
+    }
+
     const summary =
       `📌 *Serviços:* ${selectedServices.map((s: any) => s.name).join(', ')}\n` +
-      `👤 *Profissional:* ${barber?.name}\n` +
+      professionalLine +
       `📅 *Data:* ${state.selectedDate}\n` +
       `🕒 *Horário:* ${state.selectedTime}\n` +
-      `💰 *Total:* R$ ${total}\n\n` +
+      `💰 *Total:* R$ ${total / 100}\n\n` +
       `Podemos confirmar?`;
 
     const options = [
@@ -478,22 +735,27 @@ export class BookingService {
       this.logger.log(`Creating appointment via API for ${phone}`);
       const phoneWithoutDDD = phone.replace('55', '');
 
-      const user = await this.apiService.findOrCreateUser(
-        instance,
-        phoneWithoutDDD,
-        'Cliente WhatsApp',
-      );
-      if (!user) {
-        throw new Error('Could not find or create user in backend');
+      let customerId = state.customerId;
+      if (!customerId) {
+        const user = await this.apiService.findOrCreateUser(
+          instance,
+          phoneWithoutDDD,
+          'Cliente WhatsApp',
+        );
+        if (!user) {
+          throw new Error('Could not find or create user in backend');
+        }
+        customerId = user.id || user.uuid;
       }
 
       await this.apiService.createAppointment(instance, {
-        clientId: user.id || user.uuid,
+        clientId: customerId,
         barberId: state.selectedBarberId,
         branchId: state.selectedBranchId,
         services: state.selectedServices,
         date: state.selectedDate,
         time: state.selectedTime,
+        serviceBarberIds: state.serviceBarberIds,
       });
 
       await this.whatsappService.sendText(
@@ -509,5 +771,66 @@ export class BookingService {
         '❌ Ocorreu um erro ao finalizar seu agendamento. Por favor, tente novamente ou entre em contato com a barbearia.',
       );
     }
+  }
+
+  private async sendBarberModeSelection(
+    instance: string,
+    phone: string,
+    state: any,
+  ) {
+    const options = [
+      {
+        label: '👤 Um único profissional para todos os serviços',
+        rowId: 'barber_mode_single',
+      },
+      {
+        label: '👥 Um profissional diferente para cada serviço',
+        rowId: 'barber_mode_multi',
+      },
+    ];
+
+    await this.sendMenu(
+      instance,
+      phone,
+      'Seleção de Profissionais',
+      'Como deseja selecionar os profissionais para os seus serviços?',
+      options,
+      state,
+    );
+  }
+
+  private async sendNextServiceBarberSelection(
+    instance: string,
+    phone: string,
+    state: any,
+  ) {
+    const services = await this.apiService.getServices(
+      instance,
+      state.selectedBranchId,
+    );
+    const serviceId = state.selectedServices[state.currentServiceBarberIndex];
+    const service = services.find((s: any) => s.id === serviceId);
+
+    const barbers = await this.apiService.getBarbers(
+      instance,
+      state.selectedBranchId,
+    );
+    const compatibleBarbers = barbers.filter((b: any) =>
+      b.serviceIds?.includes(serviceId),
+    );
+
+    const options = compatibleBarbers.map((b: any) => ({
+      label: b.name,
+      rowId: `barber_${b.id}`,
+    }));
+
+    await this.sendMenu(
+      instance,
+      phone,
+      `Profissional para ${service?.name}`,
+      `Por favor, selecione quem vai te atender para o serviço *${service?.name}*:`,
+      options,
+      state,
+    );
   }
 }

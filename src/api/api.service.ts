@@ -139,4 +139,19 @@ export class ApiService {
       throw error;
     }
   }
+
+  async updateCustomer(tenantSlug: string, customerId: string, payload: any) {
+    try {
+      const apiUrl = await this.getApiUrl(tenantSlug);
+      const { data } = await axios.patch(
+        `${apiUrl}/cliente/customer/${customerId}`,
+        payload,
+        { headers: { 'x-tenant-slug': tenantSlug } },
+      );
+      return data;
+    } catch (error) {
+      this.logger.error(`Error updating customer: ${error.message}`);
+      return null;
+    }
+  }
 }
