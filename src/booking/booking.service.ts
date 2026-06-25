@@ -625,9 +625,97 @@ export class BookingService {
   }
 
   private async sendDateSelection(instance: string, phone: string, state: any) {
+    const company = await this.apiService.getCompanyBySlug(instance, instance);
+    const barbers = await this.apiService.getBarbers(instance, state.selectedBranchId);
+
+    const uniqueBarberIds = [
+      ...new Set([
+        state.selectedBarberId,
+        ...(state.serviceBarberIds ? Object.values(state.serviceBarberIds) : []),
+      ]),
+    ].filter(Boolean) as string[];
+
+    const activeBarbers = uniqueBarberIds
+      .map((id) => barbers.find((b: any) => b.id === id))
+      .filter(Boolean);
+
+    const daysOfWeekMap = [
+      'DOMINGO',
+      'SEGUNDA',
+      'TERCA',
+      'QUARTA',
+      'QUINTA',
+      'SEXTA',
+      'SABADO',
+    ];
+
     const options: { label: string; rowId: string }[] = [];
-    for (let i = 0; i < 7; i++) {
-      const date = addDays(new Date(), i);
+    const maxDaysToScan = 30;
+    const targetCount = 7;
+
+    const candidates: Date[] = [];
+    for (let i = 0; i < maxDaysToScan; i++) {
+      candidates.push(addDays(new Date(), i));
+    }
+
+    const workingDays = candidates.filter((date) => {
+      const dayOfWeekName = daysOfWeekMap[date.getDay()];
+
+      if (activeBarbers.length > 0) {
+        return activeBarbers.every((barber: any) => {
+          const barberWh = barber.workingHours?.find(
+            (h: any) => h.dayOfWeek === dayOfWeekName,
+          );
+          if (barberWh) {
+            return barberWh.isActive;
+          }
+          const companyWh = company?.workingHours?.find(
+            (h: any) => h.dayOfWeek === dayOfWeekName,
+          );
+          if (companyWh) {
+            return companyWh.isActive;
+          }
+          return dayOfWeekName !== 'DOMINGO';
+        });
+      }
+
+      const companyWh = company?.workingHours?.find(
+        (h: any) => h.dayOfWeek === dayOfWeekName,
+      );
+      if (companyWh) {
+        return companyWh.isActive;
+      }
+      return dayOfWeekName !== 'DOMINGO';
+    });
+
+    const workingDaysToCheck = workingDays.slice(0, 20);
+
+    const slotChecks = await Promise.all(
+      workingDaysToCheck.map(async (date) => {
+        const formatted = format(date, 'yyyy-MM-dd');
+        const hasSlotsResults = await Promise.all(
+          uniqueBarberIds.map(async (barberId) => {
+            const slots = await this.apiService.getAvailableSlots(
+              instance,
+              barberId,
+              formatted,
+            );
+            return slots.length > 0;
+          }),
+        );
+        const isAvailable = hasSlotsResults.every(Boolean);
+        return { date, isAvailable };
+      }),
+    );
+
+    const availableDays = slotChecks
+      .filter((c) => c.isAvailable)
+      .map((c) => c.date)
+      .slice(0, targetCount);
+
+    const finalDays = availableDays.length > 0 ? availableDays : workingDays.slice(0, targetCount);
+
+    for (const date of finalDays) {
       const formatted = format(date, 'yyyy-MM-dd');
       const label = format(date, 'EEEE, dd/MM', { locale: ptBR });
       options.push({
