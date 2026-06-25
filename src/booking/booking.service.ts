@@ -74,8 +74,7 @@ export class BookingService {
     }
 
     const isBack =
-      selectedRowId === 'flow_back' ||
-      text.toLowerCase() === 'voltar';
+      selectedRowId === 'flow_back' || text.toLowerCase() === 'voltar';
 
     if (isBack && state.step !== BookingState.IDLE) {
       switch (state.step) {
@@ -88,13 +87,28 @@ export class BookingService {
           );
           return;
 
-        case BookingState.SELECTING_SERVICES:
+        case BookingState.SELECTING_BARBER:
           state.selectedBranchId = undefined;
           await this.sendUnitSelection(instance, phone, company, state);
           state.step = BookingState.SELECTING_UNIT;
           break;
 
-        case BookingState.CHOSING_BARBER_MODE:
+        case BookingState.SELECTING_SERVICES:
+          state.selectedBarberId = undefined;
+          state.serviceBarberIds = {};
+          state.selectedServices = [];
+          await this.sendBarberSelection(
+            instance,
+            phone,
+            state.selectedBranchId,
+            [],
+            state,
+          );
+          state.step = BookingState.SELECTING_BARBER;
+          break;
+
+        case BookingState.SELECTING_DATE:
+          state.selectedDate = undefined;
           await this.sendServiceSelection(
             instance,
             phone,
@@ -104,68 +118,8 @@ export class BookingService {
           state.step = BookingState.SELECTING_SERVICES;
           break;
 
-        case BookingState.SELECTING_BARBER_FOR_SERVICE:
-          if (state.currentServiceBarberIndex > 0) {
-            state.currentServiceBarberIndex -= 1;
-            const currentServiceId = state.selectedServices[state.currentServiceBarberIndex];
-            if (state.serviceBarberIds) {
-              delete state.serviceBarberIds[currentServiceId];
-            }
-            await this.sendNextServiceBarberSelection(instance, phone, state);
-          } else {
-            delete state.currentServiceBarberIndex;
-            state.serviceBarberIds = {};
-            await this.sendBarberModeSelection(instance, phone, state);
-            state.step = BookingState.CHOSING_BARBER_MODE;
-          }
-          break;
-
-        case BookingState.SELECTING_BARBER:
-          state.selectedBarberId = undefined;
-          state.serviceBarberIds = {};
-          if (company.enableMultiBarber && state.selectedServices.length > 1) {
-            await this.sendBarberModeSelection(instance, phone, state);
-            state.step = BookingState.CHOSING_BARBER_MODE;
-          } else {
-            await this.sendServiceSelection(
-              instance,
-              phone,
-              state.selectedBranchId,
-              state,
-            );
-            state.step = BookingState.SELECTING_SERVICES;
-          }
-          break;
-
-        case BookingState.SELECTING_DATE:
-          state.selectedBarberId = undefined;
-          if (
-            company.enableMultiBarber &&
-            state.selectedServices.length > 1 &&
-            state.isSeparateBarberMode
-          ) {
-            state.currentServiceBarberIndex = state.selectedServices.length - 1;
-            const lastServiceId = state.selectedServices[state.currentServiceBarberIndex];
-            if (state.serviceBarberIds) {
-              delete state.serviceBarberIds[lastServiceId];
-            }
-            await this.sendNextServiceBarberSelection(instance, phone, state);
-            state.step = BookingState.SELECTING_BARBER_FOR_SERVICE;
-          } else {
-            state.serviceBarberIds = {};
-            await this.sendBarberSelection(
-              instance,
-              phone,
-              state.selectedBranchId,
-              state.selectedServices,
-              state,
-            );
-            state.step = BookingState.SELECTING_BARBER;
-          }
-          break;
-
         case BookingState.SELECTING_TIME:
-          state.selectedDate = undefined;
+          state.selectedTime = undefined;
           await this.sendDateSelection(instance, phone, state);
           state.step = BookingState.SELECTING_DATE;
           break;
@@ -235,13 +189,14 @@ export class BookingService {
       case BookingState.SELECTING_UNIT:
         if (selectedRowId) {
           state.selectedBranchId = selectedRowId.replace('unit_', '');
-          await this.sendServiceSelection(
+          await this.sendBarberSelection(
             instance,
             phone,
             state.selectedBranchId,
+            [],
             state,
           );
-          state.step = BookingState.SELECTING_SERVICES;
+          state.step = BookingState.SELECTING_BARBER;
         } else {
           await this.sendUnitSelection(
             instance,
@@ -253,23 +208,40 @@ export class BookingService {
         }
         break;
 
+      case BookingState.SELECTING_BARBER:
+        if (selectedRowId && selectedRowId.startsWith('barber_')) {
+          state.selectedBarberId = selectedRowId.replace('barber_', '');
+          state.selectedServices = [];
+          state.serviceBarberIds = {};
+          await this.sendServiceSelection(
+            instance,
+            phone,
+            state.selectedBranchId,
+            state,
+          );
+          state.step = BookingState.SELECTING_SERVICES;
+        } else {
+          await this.sendBarberSelection(
+            instance,
+            phone,
+            state.selectedBranchId,
+            [],
+            state,
+            'Por favor, selecione um profissional digitando o número:',
+          );
+        }
+        break;
+
       case BookingState.SELECTING_SERVICES:
         if (selectedRowId) {
           if (selectedRowId === 'confirm_services') {
             if (state.selectedServices && state.selectedServices.length > 0) {
-              if (company.enableMultiBarber && state.selectedServices.length > 1) {
-                await this.sendBarberModeSelection(instance, phone, state);
-                state.step = BookingState.CHOSING_BARBER_MODE;
-              } else {
-                await this.sendBarberSelection(
-                  instance,
-                  phone,
-                  state.selectedBranchId,
-                  state.selectedServices,
-                  state,
-                );
-                state.step = BookingState.SELECTING_BARBER;
-              }
+              state.serviceBarberIds = {};
+              state.selectedServices.forEach((sid: string) => {
+                state.serviceBarberIds[sid] = state.selectedBarberId;
+              });
+              await this.sendDateSelection(instance, phone, state);
+              state.step = BookingState.SELECTING_DATE;
             } else {
               await this.sendServiceSelection(
                 instance,
@@ -304,72 +276,6 @@ export class BookingService {
             state.selectedBranchId,
             state,
             'Por favor, selecione um serviço digitando o número:',
-          );
-        }
-        break;
-
-      case BookingState.CHOSING_BARBER_MODE:
-        if (selectedRowId === 'barber_mode_single') {
-          state.isSeparateBarberMode = false;
-          await this.sendBarberSelection(
-            instance,
-            phone,
-            state.selectedBranchId,
-            state.selectedServices,
-            state,
-          );
-          state.step = BookingState.SELECTING_BARBER;
-        } else if (selectedRowId === 'barber_mode_multi') {
-          state.isSeparateBarberMode = true;
-          state.currentServiceBarberIndex = 0;
-          state.serviceBarberIds = {};
-          await this.sendNextServiceBarberSelection(instance, phone, state);
-          state.step = BookingState.SELECTING_BARBER_FOR_SERVICE;
-        } else {
-          await this.sendBarberModeSelection(instance, phone, state);
-        }
-        break;
-
-      case BookingState.SELECTING_BARBER_FOR_SERVICE:
-        if (selectedRowId && selectedRowId.startsWith('barber_')) {
-          const barberId = selectedRowId.replace('barber_', '');
-          const serviceId = state.selectedServices[state.currentServiceBarberIndex];
-          if (!state.serviceBarberIds) {
-            state.serviceBarberIds = {};
-          }
-          state.serviceBarberIds[serviceId] = barberId;
-
-          state.currentServiceBarberIndex += 1;
-          if (state.currentServiceBarberIndex < state.selectedServices.length) {
-            await this.sendNextServiceBarberSelection(instance, phone, state);
-          } else {
-            state.selectedBarberId = state.serviceBarberIds[state.selectedServices[0]];
-            delete state.currentServiceBarberIndex;
-            await this.sendDateSelection(instance, phone, state);
-            state.step = BookingState.SELECTING_DATE;
-          }
-        } else {
-          await this.sendNextServiceBarberSelection(instance, phone, state);
-        }
-        break;
-
-      case BookingState.SELECTING_BARBER:
-        if (selectedRowId && selectedRowId.startsWith('barber_')) {
-          state.selectedBarberId = selectedRowId.replace('barber_', '');
-          state.serviceBarberIds = {};
-          state.selectedServices.forEach((sid: string) => {
-            state.serviceBarberIds[sid] = state.selectedBarberId;
-          });
-          await this.sendDateSelection(instance, phone, state);
-          state.step = BookingState.SELECTING_DATE;
-        } else {
-          await this.sendBarberSelection(
-            instance,
-            phone,
-            state.selectedBranchId,
-            state.selectedServices,
-            state,
-            'Por favor, selecione um profissional digitando o número:',
           );
         }
         break;
@@ -559,7 +465,20 @@ export class BookingService {
   ) {
     const services = await this.apiService.getServices(instance, branchId);
 
-    const options = services.map((s: any) => {
+    let filteredServices = services;
+    if (state.selectedBarberId) {
+      const barbers = await this.apiService.getBarbers(instance, branchId);
+      const selectedBarber = barbers.find(
+        (b: any) => b.id === state.selectedBarberId,
+      );
+      if (selectedBarber && selectedBarber.serviceIds) {
+        filteredServices = services.filter((s: any) =>
+          selectedBarber.serviceIds.includes(s.id),
+        );
+      }
+    }
+
+    const options = filteredServices.map((s: any) => {
       const isSelected = state.selectedServices?.includes(s.id);
       return {
         label: `${s.name} - R$ ${s.price / 100}${isSelected ? ' [Selecionado ✅]' : ''}`,
@@ -578,7 +497,7 @@ export class BookingService {
       customText ||
       `Ótimo! Agora escolha o serviço que deseja agendar (você pode selecionar vários):`;
     if (state.selectedServices && state.selectedServices.length > 0) {
-      const selectedNames = services
+      const selectedNames = filteredServices
         .filter((s: any) => state.selectedServices.includes(s.id))
         .map((s: any) => s.name)
         .join(', ');
@@ -626,12 +545,21 @@ export class BookingService {
 
   private async sendDateSelection(instance: string, phone: string, state: any) {
     const company = await this.apiService.getCompanyBySlug(instance, instance);
-    const barbers = await this.apiService.getBarbers(instance, state.selectedBranchId);
+    const barbers = await this.apiService.getBarbers(
+      instance,
+      state.selectedBranchId,
+    );
+    const branches = await this.apiService.getBranches(instance);
+    const selectedBranch = branches.find(
+      (b: any) => b.id === state.selectedBranchId,
+    );
 
     const uniqueBarberIds = [
       ...new Set([
         state.selectedBarberId,
-        ...(state.serviceBarberIds ? Object.values(state.serviceBarberIds) : []),
+        ...(state.serviceBarberIds
+          ? Object.values(state.serviceBarberIds)
+          : []),
       ]),
     ].filter(Boolean) as string[];
 
@@ -661,6 +589,38 @@ export class BookingService {
     const workingDays = candidates.filter((date) => {
       const dayOfWeekName = daysOfWeekMap[date.getDay()];
 
+      // 1. Check if the branch/barbershop is active on this day
+      let isBranchActive = true;
+      if (selectedBranch && selectedBranch.workingHours) {
+        const branchWh = selectedBranch.workingHours.find(
+          (h: any) => h.dayOfWeek === dayOfWeekName,
+        );
+        if (branchWh) {
+          isBranchActive = branchWh.isActive;
+        } else {
+          // Fall back to company working hours if not specified in branch
+          const companyWh = company?.workingHours?.find(
+            (h: any) => h.dayOfWeek === dayOfWeekName,
+          );
+          isBranchActive = companyWh
+            ? companyWh.isActive
+            : dayOfWeekName !== 'DOMINGO';
+        }
+      } else {
+        const companyWh = company?.workingHours?.find(
+          (h: any) => h.dayOfWeek === dayOfWeekName,
+          );
+        isBranchActive = companyWh
+          ? companyWh.isActive
+          : dayOfWeekName !== 'DOMINGO';
+      }
+
+      // If the branch is closed, this day is not available regardless of the barber
+      if (!isBranchActive) {
+        return false;
+      }
+
+      // 2. Check if all active barbers are active on this day
       if (activeBarbers.length > 0) {
         return activeBarbers.every((barber: any) => {
           const barberWh = barber.workingHours?.find(
@@ -669,23 +629,12 @@ export class BookingService {
           if (barberWh) {
             return barberWh.isActive;
           }
-          const companyWh = company?.workingHours?.find(
-            (h: any) => h.dayOfWeek === dayOfWeekName,
-          );
-          if (companyWh) {
-            return companyWh.isActive;
-          }
-          return dayOfWeekName !== 'DOMINGO';
+          // If no specific working hours settings for the barber on this day, fallback to true since branch is active
+          return true;
         });
       }
 
-      const companyWh = company?.workingHours?.find(
-        (h: any) => h.dayOfWeek === dayOfWeekName,
-      );
-      if (companyWh) {
-        return companyWh.isActive;
-      }
-      return dayOfWeekName !== 'DOMINGO';
+      return true;
     });
 
     const workingDaysToCheck = workingDays.slice(0, 20);
@@ -713,7 +662,10 @@ export class BookingService {
       .map((c) => c.date)
       .slice(0, targetCount);
 
-    const finalDays = availableDays.length > 0 ? availableDays : workingDays.slice(0, targetCount);
+    const finalDays =
+      availableDays.length > 0
+        ? availableDays
+        : workingDays.slice(0, targetCount);
 
     for (const date of finalDays) {
       const formatted = format(date, 'yyyy-MM-dd');
@@ -783,7 +735,9 @@ export class BookingService {
     );
 
     let professionalLine = '';
-    const uniqueBarberIds = [...new Set(Object.values(state.serviceBarberIds || {}))];
+    const uniqueBarberIds = [
+      ...new Set(Object.values(state.serviceBarberIds || {})),
+    ];
     if (uniqueBarberIds.length > 1) {
       professionalLine = `👤 *Profissionais:* \n`;
       selectedServices.forEach((s: any) => {
