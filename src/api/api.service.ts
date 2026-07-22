@@ -20,7 +20,7 @@ export class ApiService {
     }
     try {
       const response = await axios.get(
-        `${this.routerUrl}/api/resolve/instance/${tenantSlug}`,
+        `${this.routerUrl}/api/v1/resolve/instance/${tenantSlug}`,
       );
       const api = response.data.url_api;
       this.tenantApiCache.set(tenantSlug, api);
