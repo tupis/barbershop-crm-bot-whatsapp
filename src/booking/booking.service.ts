@@ -57,6 +57,83 @@ export class BookingService {
       }
     }
 
+    const cleanText = text.trim().toLowerCase();
+
+    const attendantCommands = [
+      'atendente',
+      'falar com atendente',
+      'chamar atendente',
+      'suporte',
+      'humano',
+      'falar com humano',
+      '#atendente',
+      '!atendente',
+      '/atendente',
+    ];
+
+    const resumeCommands = [
+      'bot',
+      '#bot',
+      '!bot',
+      '/bot',
+      'voltar bot',
+      'ativar bot',
+      'zerar timer',
+      'cancelar atendente',
+      'reiniciar bot',
+      'chamar bot',
+    ];
+
+    const isAttendantRequest =
+      selectedRowId === 'flow_attendant' ||
+      attendantCommands.includes(cleanText);
+
+    const isResumeBotRequest =
+      selectedRowId === 'flow_resume_bot' ||
+      resumeCommands.includes(cleanText);
+
+    const isPaused = await this.redisService.isBotPaused(companyId, phone);
+
+    if (isPaused) {
+      if (isResumeBotRequest) {
+        await this.redisService.resumeBot(companyId, phone);
+        await this.redisService.clearUserState(companyId, phone);
+        await this.whatsappService.sendText(
+          instance,
+          phone,
+          '🤖 *Atendimento do robô reativado!*\nComo posso te ajudar?',
+        );
+        return;
+      } else {
+        return;
+      }
+    }
+
+    if (isAttendantRequest) {
+      const pauseMinutes = parseInt(
+        process.env.BOT_PAUSE_DURATION_MINUTES || '30',
+        10,
+      );
+      const pauseSeconds = pauseMinutes * 60;
+      await this.redisService.pauseBot(companyId, phone, pauseSeconds);
+      await this.redisService.clearUserState(companyId, phone);
+      await this.whatsappService.sendText(
+        instance,
+        phone,
+        `👤 *Atendimento humano solicitado!*\n\nUm de nossos atendentes falará com você em breve.\nO bot permanecerá pausado por ${pauseMinutes} minutos.\n\n💡 *Para reativar o robô a qualquer momento, digite:* *#bot* ou *zerar timer*.`,
+      );
+      return;
+    }
+
+    if (isResumeBotRequest && cleanText !== 'bot') {
+      await this.whatsappService.sendText(
+        instance,
+        phone,
+        '🤖 *O atendimento do robô já está ativo!*\nComo posso te ajudar?',
+      );
+      return;
+    }
+
     const isReset =
       selectedRowId === 'flow_reset' ||
       text.toLowerCase() === 'reset' ||
@@ -300,7 +377,7 @@ export class BookingService {
         if (selectedRowId) {
           state.selectedTime = selectedRowId.replace('time_', '');
 
-          const phoneWithoutDDD = phone.replace('55', '');
+          const phoneWithoutDDD = phone.replace('55', '9');
           const user = await this.apiService.findOrCreateUser(
             instance,
             phoneWithoutDDD,
@@ -414,6 +491,10 @@ export class BookingService {
     menuOptions.push({
       label: '↩️ Voltar para o passo anterior',
       rowId: 'flow_back',
+    });
+    menuOptions.push({
+      label: '👤 Falar com atendente',
+      rowId: 'flow_attendant',
     });
     menuOptions.push({
       label: '🔄 Reiniciar atendimento',
@@ -609,7 +690,7 @@ export class BookingService {
       } else {
         const companyWh = company?.workingHours?.find(
           (h: any) => h.dayOfWeek === dayOfWeekName,
-          );
+        );
         isBranchActive = companyWh
           ? companyWh.isActive
           : dayOfWeekName !== 'DOMINGO';
@@ -775,7 +856,7 @@ export class BookingService {
   private async createAppointment(instance: string, phone: string, state: any) {
     try {
       this.logger.log(`Creating appointment via API for ${phone}`);
-      const phoneWithoutDDD = phone.replace('55', '');
+      const phoneWithoutDDD = phone.replace('55', '9');
 
       let customerId = state.customerId;
       if (!customerId) {

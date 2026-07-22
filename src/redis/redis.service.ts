@@ -76,4 +76,26 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     const data = await this.get(`bot:history:${branchId}:${phone}`);
     return data ? JSON.parse(data) : [];
   }
+
+  async pauseBot(
+    branchId: string,
+    phone: string,
+    ttlSeconds: number = 1800,
+  ): Promise<void> {
+    await this.set(`bot:paused:${branchId}:${phone}`, 'true', ttlSeconds);
+  }
+
+  async isBotPaused(branchId: string, phone: string): Promise<boolean> {
+    const data = await this.get(`bot:paused:${branchId}:${phone}`);
+    return data === 'true';
+  }
+
+  async resumeBot(branchId: string, phone: string): Promise<void> {
+    await this.del(`bot:paused:${branchId}:${phone}`);
+  }
+
+  async getBotPausedTtl(branchId: string, phone: string): Promise<number> {
+    const ttl = await this.client.ttl(`bot:paused:${branchId}:${phone}`);
+    return ttl > 0 ? ttl : 0;
+  }
 }
