@@ -4,6 +4,7 @@ import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { ApiService } from '../api/api.service';
 import { format, addDays } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import { phoneWithoutDDD } from '../utils/phone-without-ddd';
 
 export enum BookingState {
   IDLE = 'IDLE',
@@ -377,10 +378,10 @@ export class BookingService {
         if (selectedRowId) {
           state.selectedTime = selectedRowId.replace('time_', '');
 
-          const phoneWithoutDDD = phone.replace('55', '9');
+          const formattedPhone = phoneWithoutDDD(phone);
           const user = await this.apiService.findOrCreateUser(
             instance,
-            phoneWithoutDDD,
+            formattedPhone,
             'Cliente WhatsApp',
           );
           if (user) {
@@ -434,11 +435,11 @@ export class BookingService {
           );
         } else {
           state.tempEmail = email;
-          const phoneWithoutDDD = phone.replace('55', '');
+          const formattedPhone = phoneWithoutDDD(phone);
           await this.apiService.updateCustomer(instance, state.customerId, {
             name: state.tempName,
             email: state.tempEmail,
-            phone: phoneWithoutDDD,
+            phone: formattedPhone,
           });
           await this.sendConfirmation(instance, phone, state);
           state.step = BookingState.CONFIRMING;
