@@ -90,8 +90,7 @@ export class BookingService {
       attendantCommands.includes(cleanText);
 
     const isResumeBotRequest =
-      selectedRowId === 'flow_resume_bot' ||
-      resumeCommands.includes(cleanText);
+      selectedRowId === 'flow_resume_bot' || resumeCommands.includes(cleanText);
 
     const isPaused = await this.redisService.isBotPaused(companyId, phone);
 
@@ -453,8 +452,62 @@ export class BookingService {
           selectedRowId === 'btn_confirm' ||
           text.toLowerCase() === '1'
         ) {
-          await this.createAppointment(instance, phone, state);
-          await this.redisService.clearUserState(companyId, phone);
+          const uniqueBarberIds = [
+            ...new Set([
+              state.selectedBarberId,
+              ...(state.serviceBarberIds
+                ? Object.values(state.serviceBarberIds)
+                : []),
+            ]),
+          ].filter(Boolean) as string[];
+
+          let isStillAvailable = true;
+          for (const bId of uniqueBarberIds) {
+            const slots = await this.apiService.getAvailableSlots(
+              instance,
+              bId,
+              state.selectedDate,
+            );
+            if (!slots.includes(state.selectedTime)) {
+              isStillAvailable = false;
+              break;
+            }
+          }
+
+          if (!isStillAvailable) {
+            await this.whatsappService.sendText(
+              instance,
+              phone,
+              `⚠️ *Ops! O horário ${state.selectedTime} no dia ${state.selectedDate} não está mais disponível.* (Já foi reservado por outro cliente).\n\nPor favor, escolha outro horário disponível abaixo:`,
+            );
+            state.selectedTime = undefined;
+            await this.sendTimeSelection(
+              instance,
+              phone,
+              state.selectedBarberId,
+              state.selectedDate,
+              state,
+            );
+            state.step = BookingState.SELECTING_TIME;
+            await this.redisService.setUserState(companyId, phone, state);
+            return;
+          }
+
+          const success = await this.createAppointment(instance, phone, state);
+          if (success) {
+            await this.redisService.clearUserState(companyId, phone);
+          } else {
+            state.selectedTime = undefined;
+            await this.sendTimeSelection(
+              instance,
+              phone,
+              state.selectedBarberId,
+              state.selectedDate,
+              state,
+            );
+            state.step = BookingState.SELECTING_TIME;
+            await this.redisService.setUserState(companyId, phone, state);
+          }
           return;
         } else if (
           text.toLowerCase().includes('não') ||
@@ -854,7 +907,11 @@ export class BookingService {
     );
   }
 
-  private async createAppointment(instance: string, phone: string, state: any) {
+  private async createAppointment(
+    instance: string,
+    phone: string,
+    state: any,
+  ): Promise<boolean> {
     try {
       this.logger.log(`Creating appointment via API for ${phone}`);
       const phoneWithoutDDD = phone.replace('55', '9');
@@ -887,13 +944,15 @@ export class BookingService {
         phone,
         '✅ *Agendamento Confirmado!*\n\nSeu horário foi reservado com sucesso. Te esperamos lá!',
       );
+      return true;
     } catch (error) {
       this.logger.error(`Error creating appointment: ${error.message}`);
       await this.whatsappService.sendText(
         instance,
         phone,
-        '❌ Ocorreu um erro ao finalizar seu agendamento. Por favor, tente novamente ou entre em contato com a barbearia.',
+        '❌ Não foi possível finalizar o agendamento pois o horário selecionado não está mais disponível ou ocorreu um erro. Por favor, selecione outro horário.',
       );
+      return false;
     }
   }
 
