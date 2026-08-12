@@ -225,12 +225,12 @@ export class BookingService {
           break;
 
         case BookingState.CONFIRMING:
-          if (state.tempEmail) {
+          if (state.tempName) {
             state.tempEmail = undefined;
             await this.whatsappService.sendText(
               instance,
               phone,
-              'Por favor, digite o seu e-mail:',
+              'Por favor, digite o seu e-mail (ou digite *pular* para continuar sem e-mail):',
             );
             state.step = BookingState.ASKING_EMAIL;
           } else {
@@ -385,10 +385,7 @@ export class BookingService {
           );
           if (user) {
             state.customerId = user.id || user.uuid;
-            if (
-              user.name === 'Cliente WhatsApp' &&
-              user.email?.includes('@temp.com')
-            ) {
+            if (user.name === 'Cliente WhatsApp') {
               await this.whatsappService.sendText(
                 instance,
                 phone,
@@ -419,21 +416,43 @@ export class BookingService {
         await this.whatsappService.sendText(
           instance,
           phone,
-          `Obrigado, ${state.tempName}! Agora, por favor, digite o seu e-mail:`,
+          `Obrigado, ${state.tempName}! Agora, por favor, digite o seu e-mail (ou digite *pular* para continuar sem e-mail):`,
         );
         state.step = BookingState.ASKING_EMAIL;
         break;
 
       case BookingState.ASKING_EMAIL:
-        const email = text.trim();
-        if (!email.includes('@') || !email.includes('.')) {
+        const rawEmail = text.trim();
+        const lowerEmail = rawEmail.toLowerCase();
+        const skipKeywords = [
+          'pular',
+          'pula',
+          'não',
+          'nao',
+          '0',
+          'sem email',
+          'sem e-mail',
+          'ignorar',
+          'skip',
+        ];
+
+        if (skipKeywords.includes(lowerEmail)) {
+          state.tempEmail = undefined;
+          const formattedPhone = phoneWithoutDDD(phone);
+          await this.apiService.updateCustomer(instance, state.customerId, {
+            name: state.tempName,
+            phone: formattedPhone,
+          });
+          await this.sendConfirmation(instance, phone, state);
+          state.step = BookingState.CONFIRMING;
+        } else if (!rawEmail.includes('@') || !rawEmail.includes('.')) {
           await this.whatsappService.sendText(
             instance,
             phone,
-            'E-mail inválido. Por favor, digite um e-mail válido (ex: seuemail@email.com):',
+            'E-mail inválido. Por favor, digite um e-mail válido (ex: seuemail@email.com) ou digite *pular* para continuar sem e-mail:',
           );
         } else {
-          state.tempEmail = email;
+          state.tempEmail = rawEmail;
           const formattedPhone = phoneWithoutDDD(phone);
           await this.apiService.updateCustomer(instance, state.customerId, {
             name: state.tempName,
