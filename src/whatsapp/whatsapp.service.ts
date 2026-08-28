@@ -21,6 +21,12 @@ export class WhatsappService {
     };
   }
 
+  /** Strips formatting and prefixes the BR country code when missing. */
+  normalizeNumber(phone: string): string {
+    const digits = phone.replace(/\D/g, '');
+    return digits.startsWith('55') ? digits : `55${digits}`;
+  }
+
   async sendText(instance: string, number: string, text: string) {
     try {
       const url = `${this.apiUrl}/message/sendText/${instance}`;
