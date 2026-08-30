@@ -126,6 +126,52 @@ export class ApiService {
   }
 
   /**
+   * The pricing engine. Resolves membership benefits, quota, cadence, overage
+   * and coupon in one call — the bot never does this maths itself, so the
+   * WhatsApp price can't drift from the website's.
+   */
+  async quote(
+    tenantSlug: string,
+    payload: {
+      clientId?: string;
+      branchId: string;
+      serviceIds: string[];
+      date?: string;
+      couponCode?: string;
+    },
+  ): Promise<any | null> {
+    try {
+      const apiUrl = await this.getApiUrl(tenantSlug);
+      const { data } = await axios.post(`${apiUrl}/cliente/quote`, payload, {
+        headers: { 'x-tenant-slug': tenantSlug },
+      });
+      return data;
+    } catch (error) {
+      this.logger.error(`Error quoting cart: ${error.message}`);
+      return null;
+    }
+  }
+
+  /** Active subscription and remaining balance for a customer. */
+  async getMyMembership(
+    tenantSlug: string,
+    clientId: string,
+    branchId: string,
+  ): Promise<any | null> {
+    try {
+      const apiUrl = await this.getApiUrl(tenantSlug);
+      const { data } = await axios.get(`${apiUrl}/cliente/memberships/mine`, {
+        params: { clientId, branchId },
+        headers: { 'x-tenant-slug': tenantSlug },
+      });
+      return data;
+    } catch (error) {
+      this.logger.error(`Error fetching membership: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
    * Coupon check for the booking flow. Uses the public client endpoint because
    * the bot holds no JWT.
    */

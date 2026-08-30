@@ -476,50 +476,43 @@ export class BookingService {
         if (!typed || typed.toLowerCase() === 'pular') {
           // Clearing lets someone drop a coupon they had already applied.
           state.couponCode = undefined;
-          state.couponDiscount = 0;
           await this.sendConfirmation(instance, phone, state);
           state.step = BookingState.CONFIRMING;
           break;
         }
 
         const code = typed.toUpperCase();
-        const result = await this.apiService.validateCoupon(
-          instance,
-          code,
-          state.selectedBranchId,
-          state.selectedServices ?? [],
-        );
 
-        if (!result.valid) {
+        // Quote with the code applied: the backend decides whether it is valid
+        // and what it is worth. Repeating that maths here is how two channels
+        // start quoting different prices for the same cart.
+        const preview = await this.apiService.quote(instance, {
+          clientId: state.customerId,
+          branchId: state.selectedBranchId,
+          serviceIds: state.selectedServices ?? [],
+          date: state.selectedDate,
+          couponCode: code,
+        });
+
+        if (!preview) {
           await this.whatsappService.sendText(
             instance,
             phone,
-            `❌ ${result.reason || 'Cupom inválido.'}\n\nDigite outro código ou *pular* para seguir sem desconto:`,
+            'Nao consegui validar o cupom agora. Digite novamente ou *pular* para seguir sem desconto:',
           );
           break;
         }
 
-        // Work out the discount here so the summary and the backend agree.
-        const services = await this.apiService.getServices(
-          instance,
-          state.selectedBranchId,
-        );
-        const selected = services.filter((sv: any) =>
-          (state.selectedServices ?? []).includes(sv.id),
-        );
-        const subtotal = selected.reduce(
-          (sum: number, sv: any) => sum + sv.price,
-          0,
-        );
-
-        const coupon = result.coupon ?? {};
-        const discount =
-          coupon.discountType === 'PERCENTAGE'
-            ? Math.round((subtotal * Number(coupon.discountValue ?? 0)) / 100)
-            : Number(coupon.discountValue ?? 0);
+        if (!preview.coupon?.valid) {
+          await this.whatsappService.sendText(
+            instance,
+            phone,
+            `❌ ${preview.coupon?.reason || 'Cupom invalido.'}\n\nDigite outro código ou *pular* para seguir sem desconto:`,
+          );
+          break;
+        }
 
         state.couponCode = code;
-        state.couponDiscount = Math.max(0, Math.min(discount, subtotal));
 
         await this.whatsappService.sendText(
           instance,
@@ -713,10 +706,36 @@ export class BookingService {
       }
     }
 
+    // The customer should learn what their plan covers while choosing, not
+    // only at the summary — that is the moment the information changes what
+    // they pick.
+    const statement = state.customerId
+      ? await this.apiService.getMyMembership(
+          instance,
+          state.customerId,
+          branchId,
+        )
+      : null;
+
+    const balanceByService = new Map<string, any>(
+      (statement?.balances ?? []).map((b: any) => [b.serviceId, b]),
+    );
+
+    const planTag = (serviceId: string): string => {
+      const balance = balanceByService.get(serviceId);
+      if (!balance) return '';
+
+      if (balance.remaining === null) return ' ⭐ incluso no plano';
+      if (balance.remaining > 0) {
+        return ` ⭐ ${balance.remaining} no plano`;
+      }
+      return ''; // Quota spent: it is simply full price now.
+    };
+
     const options = filteredServices.map((s: any) => {
       const isSelected = state.selectedServices?.includes(s.id);
       return {
-        label: `${s.name} - R$ ${s.price / 100}${isSelected ? ' [Selecionado ✅]' : ''}`,
+        label: `${s.name} - R$ ${s.price / 100}${planTag(s.id)}${isSelected ? ' [Selecionado ✅]' : ''}`,
         rowId: `service_${s.id}`,
       };
     });
@@ -731,6 +750,25 @@ export class BookingService {
     let descriptionText =
       customText ||
       `Ótimo! Agora escolha o serviço que deseja agendar (você pode selecionar vários):`;
+
+    if (statement?.membership?.planName) {
+      const available = (statement.balances ?? []).filter(
+        (b: any) => b.remaining === null || b.remaining > 0,
+      );
+
+      const resume = available.length
+        ? available
+            .map(
+              (b: any) =>
+                `${b.remaining === null ? 'ilimitado' : b.remaining}x ${b.serviceName}`,
+            )
+            .join(', ')
+        : 'sem usos restantes neste ciclo';
+
+      descriptionText =
+        `⭐ *${statement.membership.planName}:* ${resume}.\n\n` +
+        descriptionText;
+    }
     if (state.selectedServices && state.selectedServices.length > 0) {
       const selectedNames = filteredServices
         .filter((s: any) => state.selectedServices.includes(s.id))
@@ -987,16 +1025,51 @@ export class BookingService {
     const money = (cents: number) =>
       `R$ ${(cents / 100).toFixed(2).replace('.', ',')}`;
 
-    // The discount was worked out when the code was accepted.
-    const discount = state.couponDiscount ?? 0;
-    const finalTotal = Math.max(0, total - discount);
+    // Every price decision — plan benefit, quota, cadence, overage, coupon —
+    // comes from the backend. The bot only renders what it is told, so the
+    // WhatsApp total can never disagree with the website's.
+    const quote = await this.apiService.quote(instance, {
+      clientId: state.customerId,
+      branchId: state.selectedBranchId,
+      serviceIds: state.selectedServices,
+      date: state.selectedDate,
+      couponCode: state.couponCode,
+    });
 
-    let priceLines = `💰 *Total:* ${money(total)}\n`;
-    if (state.couponCode && discount > 0) {
+    let priceLines: string;
+
+    if (quote) {
+      const t = quote.totals;
+      const hasDiscount =
+        t.membershipDiscountCents > 0 || t.couponDiscountCents > 0;
+
+      if (hasDiscount) {
+        priceLines = `💰 *Subtotal:* ${money(t.listCents)}\n`;
+        if (t.membershipDiscountCents > 0) {
+          priceLines += `⭐ *${quote.membership?.planName ?? 'Plano'}:* -${money(t.membershipDiscountCents)}\n`;
+        }
+        if (t.couponDiscountCents > 0) {
+          priceLines += `🎟️ *Cupom ${state.couponCode}:* -${money(t.couponDiscountCents)}\n`;
+        }
+        priceLines += `💵 *Total:* ${money(t.chargedCents)}\n`;
+      } else {
+        priceLines = `💰 *Total:* ${money(t.chargedCents)}\n`;
+      }
+
+      // The engine writes these sentences so the wording lives in one place.
+      if (quote.messages?.length) {
+        priceLines += `\n${quote.messages.map((m: string) => `_${m}_`).join('\n')}\n`;
+      }
+    } else {
+      // Backend unreachable: fall back to the catalog sum rather than showing
+      // nothing, and say plainly that the total is provisional.
+      const listTotal = selectedServices.reduce(
+        (sum: number, s: any) => sum + s.price,
+        0,
+      );
       priceLines =
-        `💰 *Subtotal:* ${money(total)}\n` +
-        `🎟️ *Cupom ${state.couponCode}:* -${money(discount)}\n` +
-        `💵 *Total:* ${money(finalTotal)}\n`;
+        `💰 *Total:* ${money(listTotal)}\n` +
+        `_Nao consegui conferir descontos agora; o valor final sai na confirmacao._\n`;
     }
 
     const summary =
