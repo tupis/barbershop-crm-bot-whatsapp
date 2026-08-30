@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
+import { RedisService } from '../redis/redis.service';
 
 @Injectable()
 export class WhatsappService {
@@ -8,7 +9,10 @@ export class WhatsappService {
   private readonly apiUrl: string;
   private readonly globalApiKey: string;
 
-  constructor(private configService: ConfigService) {
+  constructor(
+    private configService: ConfigService,
+    private readonly redisService: RedisService,
+  ) {
     this.apiUrl = this.configService.get<string>('EVOLUTION_API_URL') || '';
     this.globalApiKey =
       this.configService.get<string>('EVOLUTION_API_KEY') || '';
@@ -21,6 +25,20 @@ export class WhatsappService {
     };
   }
 
+  /**
+   * Evolution echoes the bot's own messages back through the webhook with
+   * fromMe = true. Recording the id is what lets the webhook tell a bot
+   * message apart from one an attendant typed.
+   */
+  private async rememberSentMessage(instance: string, response: any) {
+    const messageId = response?.data?.key?.id;
+    if (messageId) {
+      await this.redisService
+        .markBotMessage(instance, messageId)
+        .catch(() => undefined);
+    }
+  }
+
   /** Strips formatting and prefixes the BR country code when missing. */
   normalizeNumber(phone: string): string {
     const digits = phone.replace(/\D/g, '');
@@ -30,7 +48,7 @@ export class WhatsappService {
   async sendText(instance: string, number: string, text: string) {
     try {
       const url = `${this.apiUrl}/message/sendText/${instance}`;
-      await axios.post(
+      const response = await axios.post(
         url,
         {
           number,
@@ -39,6 +57,7 @@ export class WhatsappService {
         },
         { headers: this.headers },
       );
+      await this.rememberSentMessage(instance, response);
     } catch (error) {
       this.logger.error(`Error sending text: ${error.message}`);
     }
@@ -55,7 +74,7 @@ export class WhatsappService {
     try {
       const url = `${this.apiUrl}/message/sendList/${instance}`;
 
-      await axios.post(
+      const response = await axios.post(
         url,
         {
           number,
@@ -67,6 +86,7 @@ export class WhatsappService {
         },
         { headers: this.headers },
       );
+      await this.rememberSentMessage(instance, response);
     } catch (error) {
       this.logger.error(`Error sending list: ${error.message}`);
     }
@@ -81,7 +101,7 @@ export class WhatsappService {
   ) {
     try {
       const url = `${this.apiUrl}/message/sendButtons/${instance}`;
-      await axios.post(
+      const response = await axios.post(
         url,
         {
           number,
@@ -92,6 +112,7 @@ export class WhatsappService {
         },
         { headers: this.headers },
       );
+      await this.rememberSentMessage(instance, response);
     } catch (error) {
       this.logger.error(`Error sending buttons: ${error.message}`);
     }

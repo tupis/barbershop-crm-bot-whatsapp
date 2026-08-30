@@ -17,6 +17,7 @@ export enum BookingState {
   SELECTING_TIME = 'SELECTING_TIME',
   ASKING_NAME = 'ASKING_NAME',
   ASKING_EMAIL = 'ASKING_EMAIL',
+  ASKING_COUPON = 'ASKING_COUPON',
   CONFIRMING = 'CONFIRMING',
 }
 
@@ -222,6 +223,11 @@ export class BookingService {
             'Por favor, digite o seu nome completo:',
           );
           state.step = BookingState.ASKING_NAME;
+          break;
+
+        case BookingState.ASKING_COUPON:
+          await this.sendConfirmation(instance, phone, state);
+          state.step = BookingState.CONFIRMING;
           break;
 
         case BookingState.CONFIRMING:
@@ -464,7 +470,82 @@ export class BookingService {
         }
         break;
 
+      case BookingState.ASKING_COUPON: {
+        const typed = text.trim();
+
+        if (!typed || typed.toLowerCase() === 'pular') {
+          // Clearing lets someone drop a coupon they had already applied.
+          state.couponCode = undefined;
+          state.couponDiscount = 0;
+          await this.sendConfirmation(instance, phone, state);
+          state.step = BookingState.CONFIRMING;
+          break;
+        }
+
+        const code = typed.toUpperCase();
+        const result = await this.apiService.validateCoupon(
+          instance,
+          code,
+          state.selectedBranchId,
+          state.selectedServices ?? [],
+        );
+
+        if (!result.valid) {
+          await this.whatsappService.sendText(
+            instance,
+            phone,
+            `❌ ${result.reason || 'Cupom inválido.'}\n\nDigite outro código ou *pular* para seguir sem desconto:`,
+          );
+          break;
+        }
+
+        // Work out the discount here so the summary and the backend agree.
+        const services = await this.apiService.getServices(
+          instance,
+          state.selectedBranchId,
+        );
+        const selected = services.filter((sv: any) =>
+          (state.selectedServices ?? []).includes(sv.id),
+        );
+        const subtotal = selected.reduce(
+          (sum: number, sv: any) => sum + sv.price,
+          0,
+        );
+
+        const coupon = result.coupon ?? {};
+        const discount =
+          coupon.discountType === 'PERCENTAGE'
+            ? Math.round((subtotal * Number(coupon.discountValue ?? 0)) / 100)
+            : Number(coupon.discountValue ?? 0);
+
+        state.couponCode = code;
+        state.couponDiscount = Math.max(0, Math.min(discount, subtotal));
+
+        await this.whatsappService.sendText(
+          instance,
+          phone,
+          `✅ Cupom *${code}* aplicado!`,
+        );
+        await this.sendConfirmation(instance, phone, state);
+        state.step = BookingState.CONFIRMING;
+        break;
+      }
+
       case BookingState.CONFIRMING:
+        if (
+          selectedRowId === 'btn_coupon' ||
+          text.toLowerCase() === 'cupom' ||
+          text.toLowerCase() === '2'
+        ) {
+          await this.whatsappService.sendText(
+            instance,
+            phone,
+            '🎟️ Digite o código do cupom (ou *pular* para continuar sem desconto):',
+          );
+          state.step = BookingState.ASKING_COUPON;
+          break;
+        }
+
         if (
           text.toLowerCase().includes('sim') ||
           text.toLowerCase() === 'confirmar' ||
@@ -903,16 +984,35 @@ export class BookingService {
       professionalLine = `👤 *Profissional:* ${barber?.name}\n`;
     }
 
+    const money = (cents: number) =>
+      `R$ ${(cents / 100).toFixed(2).replace('.', ',')}`;
+
+    // The discount was worked out when the code was accepted.
+    const discount = state.couponDiscount ?? 0;
+    const finalTotal = Math.max(0, total - discount);
+
+    let priceLines = `💰 *Total:* ${money(total)}\n`;
+    if (state.couponCode && discount > 0) {
+      priceLines =
+        `💰 *Subtotal:* ${money(total)}\n` +
+        `🎟️ *Cupom ${state.couponCode}:* -${money(discount)}\n` +
+        `💵 *Total:* ${money(finalTotal)}\n`;
+    }
+
     const summary =
       `📌 *Serviços:* ${selectedServices.map((s: any) => s.name).join(', ')}\n` +
       professionalLine +
       `📅 *Data:* ${state.selectedDate}\n` +
       `🕒 *Horário:* ${state.selectedTime}\n` +
-      `💰 *Total:* R$ ${total / 100}\n\n` +
-      `Podemos confirmar?`;
+      priceLines +
+      `\nPodemos confirmar?`;
 
     const options = [
       { label: '✅ Confirmar', rowId: 'btn_confirm' },
+      {
+        label: state.couponCode ? '🎟️ Trocar cupom' : '🎟️ Tenho um cupom',
+        rowId: 'btn_coupon',
+      },
       { label: '❌ Cancelar', rowId: 'btn_cancel' },
     ];
 
@@ -956,6 +1056,7 @@ export class BookingService {
         date: state.selectedDate,
         time: state.selectedTime,
         serviceBarberIds: state.serviceBarberIds,
+        couponCode: state.couponCode,
       });
 
       await this.whatsappService.sendText(

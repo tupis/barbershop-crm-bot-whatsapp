@@ -37,6 +37,54 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await this.client.del(key);
   }
 
+  // ---------------------------------------------------------------------
+  // Human handover
+  //
+  // Evolution reports messages the bot itself sends with fromMe = true, the
+  // same as a message typed by a real attendant. The bot therefore records the
+  // id of everything it sends, so the webhook can tell the two apart and only
+  // step aside for an actual person.
+  // ---------------------------------------------------------------------
+
+  /** Remembers a message id the bot just sent. */
+  async markBotMessage(instance: string, messageId: string): Promise<void> {
+    if (!messageId) return;
+    // Only needs to outlive the webhook round-trip; minutes are generous.
+    await this.set(`bot:sent:${instance}:${messageId}`, '1', 300);
+  }
+
+  async wasSentByBot(instance: string, messageId: string): Promise<boolean> {
+    if (!messageId) return false;
+    return (await this.get(`bot:sent:${instance}:${messageId}`)) !== null;
+  }
+
+  /** Silences the bot for one conversation after an attendant replies. */
+  async pauseAutomation(
+    instance: string,
+    phone: string,
+    seconds: number,
+  ): Promise<void> {
+    await this.set(
+      `bot:paused:${instance}:${phone}`,
+      new Date().toISOString(),
+      seconds,
+    );
+  }
+
+  async isAutomationPaused(instance: string, phone: string): Promise<boolean> {
+    return (await this.get(`bot:paused:${instance}:${phone}`)) !== null;
+  }
+
+  /** Seconds left on the pause, or 0 when the bot is free to answer. */
+  async pauseTimeLeft(instance: string, phone: string): Promise<number> {
+    const ttl = await this.client.ttl(`bot:paused:${instance}:${phone}`);
+    return ttl > 0 ? ttl : 0;
+  }
+
+  async resumeAutomation(instance: string, phone: string): Promise<void> {
+    await this.del(`bot:paused:${instance}:${phone}`);
+  }
+
   async getUserState(branchId: string, phone: string): Promise<any | null> {
     const data = await this.get(`bot:state:${branchId}:${phone}`);
     return data ? JSON.parse(data) : null;

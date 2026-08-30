@@ -125,6 +125,33 @@ export class ApiService {
     }
   }
 
+  /**
+   * Coupon check for the booking flow. Uses the public client endpoint because
+   * the bot holds no JWT.
+   */
+  async validateCoupon(
+    tenantSlug: string,
+    code: string,
+    branchId: string,
+    serviceIds: string[],
+  ): Promise<{ valid: boolean; reason?: string; coupon?: any }> {
+    try {
+      const apiUrl = await this.getApiUrl(tenantSlug);
+      const { data } = await axios.post(
+        `${apiUrl}/cliente/coupons/validate`,
+        { code, branchId, serviceIds },
+        { headers: { 'x-tenant-slug': tenantSlug } },
+      );
+      return data;
+    } catch (error) {
+      this.logger.error(`Error validating coupon: ${error.message}`);
+      return {
+        valid: false,
+        reason: 'Nao foi possivel validar o cupom agora.',
+      };
+    }
+  }
+
   async createAppointment(tenantSlug: string, payload: any) {
     try {
       const apiUrl = await this.getApiUrl(tenantSlug);
