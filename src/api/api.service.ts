@@ -1,10 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
+import { BotLogger } from '../common/logging/bot-logger';
 
 @Injectable()
 export class ApiService {
-  private readonly logger = new Logger(ApiService.name);
+  private readonly log = new BotLogger(ApiService.name);
   private readonly routerUrl: string;
   private readonly tenantApiCache: Map<string, string> = new Map();
 
@@ -26,7 +27,7 @@ export class ApiService {
       this.tenantApiCache.set(tenantSlug, api);
       return api;
     } catch (e) {
-      this.logger.error(`Failed to resolve api url for tenant ${tenantSlug}`);
+      this.log.error('api.resolve_tenant_failed', e, { tenantSlug });
       return (
         this.configService.get<string>('BACKEND_API_URL') ||
         'http://localhost:5500'
@@ -42,7 +43,7 @@ export class ApiService {
       });
       return data;
     } catch (error) {
-      this.logger.error(`Error fetching company: ${error.message}`);
+      this.log.error('api.fetching_company_failed', error);
       return null;
     }
   }
@@ -55,7 +56,7 @@ export class ApiService {
       });
       return (data || []).filter((b: any) => b.isActive);
     } catch (error) {
-      this.logger.error(`Error fetching branches: ${error.message}`);
+      this.log.error('api.fetching_branches_failed', error);
       return [];
     }
   }
@@ -69,7 +70,7 @@ export class ApiService {
       });
       return data || [];
     } catch (error) {
-      this.logger.error(`Error fetching services: ${error.message}`);
+      this.log.error('api.fetching_services_failed', error);
       return [];
     }
   }
@@ -83,7 +84,7 @@ export class ApiService {
       });
       return data || [];
     } catch (error) {
-      this.logger.error(`Error fetching barbers: ${error.message}`);
+      this.log.error('api.fetching_barbers_failed', error);
       return [];
     }
   }
@@ -102,7 +103,7 @@ export class ApiService {
         .filter((slot: any) => slot.available)
         .map((s: any) => s.time);
     } catch (error) {
-      this.logger.error(`Error fetching available slots: ${error.message}`);
+      this.log.error('api.fetching_available_slots_failed', error);
       return [];
     }
   }
@@ -120,7 +121,7 @@ export class ApiService {
       );
       return data;
     } catch (error) {
-      this.logger.error(`Error finding/creating user: ${error.message}`);
+      this.log.error('api.finding_creating_user_failed', error);
       return null;
     }
   }
@@ -144,7 +145,7 @@ export class ApiService {
       );
       return data;
     } catch (error) {
-      this.logger.error(`Error validating coupon: ${error.message}`);
+      this.log.error('api.validating_coupon_failed', error);
       return {
         valid: false,
         reason: 'Nao foi possivel validar o cupom agora.',
@@ -162,7 +163,7 @@ export class ApiService {
       );
       return data;
     } catch (error) {
-      this.logger.error(`Error creating appointment: ${error.message}`);
+      this.log.error('api.creating_appointment_failed', error);
       throw error;
     }
   }
@@ -177,7 +178,7 @@ export class ApiService {
       );
       return data;
     } catch (error) {
-      this.logger.error(`Error updating customer: ${error.message}`);
+      this.log.error('api.updating_customer_failed', error);
       return null;
     }
   }
