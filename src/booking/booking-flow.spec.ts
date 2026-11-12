@@ -10,6 +10,7 @@ function build(api: Record<string, any> = {}) {
   const sent: string[] = [];
   const store = new Map<string, any>();
   const paused = new Set<string>();
+  const welcomed = new Map<string, string>();
 
   const whatsapp: any = {
     sendText: jest.fn(async (_i: string, _p: string, text: string) => {
@@ -47,6 +48,13 @@ function build(api: Record<string, any> = {}) {
     isBotPaused: jest.fn(async (_c: string, p: string) => paused.has(p)),
     pauseBot: jest.fn(async (_c: string, p: string) => paused.add(p)),
     resumeBot: jest.fn(async (_c: string, p: string) => paused.delete(p)),
+    markWelcomeSent: jest.fn(async (_c: string, p: string) =>
+      welcomed.set(p, new Date().toISOString()),
+    ),
+    lastWelcomeAt: jest.fn(
+      async (_c: string, p: string) => welcomed.get(p) ?? null,
+    ),
+    clearWelcome: jest.fn(async (_c: string, p: string) => welcomed.delete(p)),
   };
 
   const service = new BookingService(apiService, redis, whatsapp);
@@ -60,6 +68,7 @@ function build(api: Record<string, any> = {}) {
     last: () => sent.at(-1) ?? '',
     state: () => store.get(phone),
     seed: (state: any) => store.set(phone, state),
+    welcomed,
     say: (text: string, rowId?: string) =>
       service.handleIncomingMessage('loja', phone, text, rowId),
   };
@@ -78,6 +87,7 @@ describe('BookingService conversation', () => {
   beforeAll(() => {
     jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
     jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
   });
   afterAll(() => jest.restoreAllMocks());
 
@@ -404,5 +414,51 @@ describe('BookingService conversation', () => {
     const t = build({ getCompanyBySlug: jest.fn(async () => null) });
     await t.say('oi');
     expect(t.sent).toEqual([]);
+  });
+
+  describe('welcome menu (incidente: menu de unidade repetido)', () => {
+    it('greets an idle customer once and records the cooldown', async () => {
+      const t = build();
+      await t.say('oi');
+      expect(t.last()).toContain('Bem-vindo(a)');
+      expect(t.welcomed.size).toBe(1);
+    });
+
+    it('does not greet again while the cooldown is active, even if the state was lost', async () => {
+      const t = build();
+      await t.say('oi');
+      t.redis.clearUserState('co', '5511999990000');
+      t.sent.length = 0;
+
+      await t.say('oi');
+      await t.say('alguém aí?');
+
+      expect(t.sent).toHaveLength(0);
+    });
+
+    it('restarts on an explicit keyword despite the cooldown', async () => {
+      const t = build();
+      await t.say('oi');
+      await t.redis.clearUserState('co', '5511999990000');
+
+      await t.say('menu');
+
+      expect(t.last()).toContain('Bem-vindo(a)');
+    });
+
+    it('never opens the menu for a message without text (audio, sticker...)', async () => {
+      const t = build();
+      await t.say('');
+      expect(t.sent).toHaveLength(0);
+      expect(t.state()).toBeUndefined();
+    });
+
+    it('a reset clears the cooldown so the next message starts over', async () => {
+      const t = build();
+      await t.say('oi');
+      await t.say('sair');
+      await t.say('oi');
+      expect(t.last()).toContain('Bem-vindo(a)');
+    });
   });
 });

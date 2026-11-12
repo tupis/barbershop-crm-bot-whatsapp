@@ -85,8 +85,13 @@ describe('WhatsApp booking conversation (e2e)', () => {
       }),
     ]);
 
-    // The conversation starts over afterwards.
-    await ctx.say(phone, 'oi de novo');
+    // A thank-you right after booking must not reopen the menu...
+    const sentBefore = ctx.fake.textsTo(phone).length;
+    await ctx.say(phone, 'valeu!');
+    expect(ctx.fake.textsTo(phone)).toHaveLength(sentBefore);
+
+    // ...but asking for it explicitly starts over.
+    await ctx.say(phone, 'menu');
     expect(last()).toContain('Bem-vindo(a)');
   });
 

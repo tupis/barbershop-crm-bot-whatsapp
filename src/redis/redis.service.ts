@@ -1,10 +1,12 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
+import { BotLogger } from '../common/logging/bot-logger';
 
 @Injectable()
 export class RedisService implements OnModuleInit, OnModuleDestroy {
   private client: Redis;
+  private readonly log = new BotLogger(RedisService.name);
 
   constructor(private configService: ConfigService) {}
 
@@ -14,7 +16,20 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       port: this.configService.get<number>('REDIS_PORT'),
       username: this.configService.get<string>('REDIS_USER'),
       password: this.configService.get<string>('REDIS_PASSWORD'),
+      // Without a cap, commands queue silently while Redis is unreachable and
+      // the webhook hangs; Evolution then times out and re-delivers. Failing
+      // fast keeps the request short and the failure visible in the logs.
+      maxRetriesPerRequest: 2,
+      connectTimeout: 5000,
     });
+
+    // Connection health is what explains "the bot did odd things at 3am".
+    this.client.on('ready', () => this.log.info('redis.ready'));
+    this.client.on('reconnecting', (ms: number) =>
+      this.log.warn('redis.reconnecting', { inMs: ms }),
+    );
+    this.client.on('end', () => this.log.warn('redis.connection_closed'));
+    this.client.on('error', (err) => this.log.error('redis.error', err));
   }
 
   onModuleDestroy() {
@@ -51,6 +66,67 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     if (!messageId) return;
     // Only needs to outlive the webhook round-trip; minutes are generous.
     await this.set(`bot:sent:${instance}:${messageId}`, '1', 300);
+  }
+
+  /**
+   * Idempotency for incoming webhooks: true only the first time a message id
+   * is seen. Evolution re-delivers on timeouts/errors and WhatsApp itself
+   * re-emits messages after decryption retries; without this every copy got
+   * its own reply.
+   */
+  async claimMessage(
+    instance: string,
+    messageId: string,
+    ttlSeconds = 86400,
+  ): Promise<boolean> {
+    const result = await this.client.set(
+      `bot:seen:${instance}:${messageId}`,
+      new Date().toISOString(),
+      'EX',
+      ttlSeconds,
+      'NX',
+    );
+    return result === 'OK';
+  }
+
+  /**
+   * Remembers that the welcome menu went out. While it is set the bot does not
+   * greet the same customer again from scratch — a safety net for when the
+   * conversation state is lost or the customer keeps chatting after booking.
+   */
+  async markWelcomeSent(
+    companyId: string,
+    phone: string,
+    ttlSeconds: number,
+  ): Promise<void> {
+    await this.set(
+      `bot:welcome:${companyId}:${phone}`,
+      new Date().toISOString(),
+      ttlSeconds,
+    );
+  }
+
+  /** ISO time of the last welcome still inside the cooldown, or null. */
+  async lastWelcomeAt(
+    companyId: string,
+    phone: string,
+  ): Promise<string | null> {
+    return this.get(`bot:welcome:${companyId}:${phone}`);
+  }
+
+  async clearWelcome(companyId: string, phone: string): Promise<void> {
+    await this.del(`bot:welcome:${companyId}:${phone}`);
+  }
+
+  /**
+   * Counts messages sent to one number in the current hour window. Used as a
+   * circuit breaker: whatever the bug, a customer cannot be flooded.
+   */
+  async countOutbound(instance: string, number: string): Promise<number> {
+    const key = `bot:outbound:${instance}:${number}`;
+    const count = await this.client.incr(key);
+    if (count === 1) await this.client.expire(key, 3600);
+    return count;
   }
 
   async wasSentByBot(instance: string, messageId: string): Promise<boolean> {

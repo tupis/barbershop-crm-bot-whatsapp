@@ -1,10 +1,32 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { RedisService } from '../redis/redis.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { ApiService } from '../api/api.service';
 import { format, addDays } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { phoneWithoutDDD } from '../utils/phone-without-ddd';
+import { BotLogger, preview } from '../common/logging/bot-logger';
+
+/**
+ * After the welcome menu goes out, the bot does not greet the same customer
+ * from scratch again for this long (unless they ask with a restart keyword).
+ */
+const DEFAULT_WELCOME_COOLDOWN_MINUTES = 60;
+
+/** Words that always (re)start the booking flow, cooldown or not. */
+const START_KEYWORDS = [
+  'menu',
+  'agendar',
+  'agendamento',
+  'novo agendamento',
+  'inicio',
+  'início',
+  'comecar',
+  'começar',
+];
+
+/** Steps whose free text is personal data and stays out of the logs. */
+const PRIVATE_STEPS = new Set(['ASKING_NAME', 'ASKING_EMAIL']);
 
 export enum BookingState {
   IDLE = 'IDLE',
@@ -23,7 +45,63 @@ export enum BookingState {
 
 @Injectable()
 export class BookingService {
-  private readonly logger = new Logger(BookingService.name);
+  private readonly log = new BotLogger(BookingService.name);
+
+  private get welcomeCooldownSeconds(): number {
+    const configured = Number(process.env.WELCOME_COOLDOWN_MINUTES);
+    const minutes =
+      Number.isFinite(configured) && configured >= 0
+        ? configured
+        : DEFAULT_WELCOME_COOLDOWN_MINUTES;
+    return Math.round(minutes * 60);
+  }
+
+  /** Customer explicitly ended the conversation: next message starts fresh. */
+  private async resetConversation(companyId: string, phone: string) {
+    await this.redisService.clearUserState(companyId, phone);
+    await this.redisService
+      .clearWelcome(companyId, phone)
+      .catch((err) => this.log.error('redis.clear_welcome_failed', err));
+  }
+
+  /**
+   * Decides whether an idle customer gets the welcome menu. Returns false
+   * (and logs why) when the message is not a reason to greet them.
+   */
+  private async shouldGreet(
+    companyId: string,
+    phone: string,
+    text: string,
+    selectedRowId?: string,
+  ): Promise<boolean> {
+    const clean = text.trim().toLowerCase();
+
+    // Audio, image without caption, sticker... — almost always meant for a
+    // person, never a reason to fire the menu.
+    if (!clean && !selectedRowId) {
+      this.log.info('booking.welcome_skipped', { reason: 'empty_text' });
+      return false;
+    }
+
+    if (START_KEYWORDS.includes(clean)) return true;
+
+    const lastWelcome = await this.redisService
+      .lastWelcomeAt(companyId, phone)
+      .catch((err) => {
+        this.log.error('redis.last_welcome_failed', err);
+        return null;
+      });
+
+    if (lastWelcome) {
+      this.log.warn('booking.welcome_suppressed', {
+        reason: 'cooldown',
+        lastWelcomeAt: lastWelcome,
+        cooldownMinutes: this.welcomeCooldownSeconds / 60,
+      });
+      return false;
+    }
+    return true;
+  }
 
   constructor(
     private apiService: ApiService,
@@ -40,17 +118,29 @@ export class BookingService {
     const company = await this.apiService.getCompanyBySlug(instance, instance);
 
     if (!company) {
-      this.logger.error(`Company not found for instance: ${instance}`);
+      this.log.error('booking.company_not_found', undefined, { instance });
       return;
     }
 
     const companyId = company.id || company.uuid;
 
     let state = await this.redisService.getUserState(companyId, phone);
+    const hadState = Boolean(state);
 
     if (!state) {
       state = { step: BookingState.IDLE, selectedServices: [] };
     }
+
+    const stepBefore = state.step;
+    this.log.info('booking.message', {
+      companyId,
+      step: stepBefore,
+      hadState,
+      selectedRowId,
+      textPreview: PRIVATE_STEPS.has(stepBefore)
+        ? '[redacted]'
+        : preview(text, 30),
+    });
 
     if (!selectedRowId && state.availableOptions && /^\d+$/.test(text)) {
       const index = parseInt(text, 10) - 1;
@@ -98,7 +188,8 @@ export class BookingService {
     if (isPaused) {
       if (isResumeBotRequest) {
         await this.redisService.resumeBot(companyId, phone);
-        await this.redisService.clearUserState(companyId, phone);
+        await this.resetConversation(companyId, phone);
+        this.log.info('booking.bot_resumed_by_customer');
         await this.whatsappService.sendText(
           instance,
           phone,
@@ -118,6 +209,7 @@ export class BookingService {
       const pauseSeconds = pauseMinutes * 60;
       await this.redisService.pauseBot(companyId, phone, pauseSeconds);
       await this.redisService.clearUserState(companyId, phone);
+      this.log.info('booking.attendant_requested', { pauseMinutes });
       await this.whatsappService.sendText(
         instance,
         phone,
@@ -142,7 +234,8 @@ export class BookingService {
       text.toLowerCase() === 'reiniciar';
 
     if (isReset) {
-      await this.redisService.clearUserState(companyId, phone);
+      await this.resetConversation(companyId, phone);
+      this.log.info('booking.reset_by_customer');
       await this.whatsappService.sendText(
         instance,
         phone,
@@ -157,7 +250,7 @@ export class BookingService {
     if (isBack && state.step !== BookingState.IDLE) {
       switch (state.step) {
         case BookingState.SELECTING_UNIT:
-          await this.redisService.clearUserState(companyId, phone);
+          await this.resetConversation(companyId, phone);
           await this.whatsappService.sendText(
             instance,
             phone,
@@ -265,8 +358,15 @@ export class BookingService {
 
     switch (state.step) {
       case BookingState.IDLE:
+        if (!(await this.shouldGreet(companyId, phone, text, selectedRowId))) {
+          return;
+        }
         await this.sendUnitSelection(instance, phone, company, state);
         state.step = BookingState.SELECTING_UNIT;
+        await this.redisService
+          .markWelcomeSent(companyId, phone, this.welcomeCooldownSeconds)
+          .catch((err) => this.log.error('redis.mark_welcome_failed', err));
+        this.log.info('booking.welcome_sent', { hadState });
         break;
 
       case BookingState.SELECTING_UNIT:
@@ -595,7 +695,10 @@ export class BookingService {
 
           const success = await this.createAppointment(instance, phone, state);
           if (success) {
+            // Welcome cooldown is kept on purpose: a "valeu!" right after
+            // booking must not open the menu again.
             await this.redisService.clearUserState(companyId, phone);
+            this.log.info('booking.completed');
           } else {
             state.selectedTime = undefined;
             await this.sendTimeSelection(
@@ -615,7 +718,8 @@ export class BookingService {
           selectedRowId === 'btn_cancel' ||
           text.toLowerCase() === '2'
         ) {
-          await this.redisService.clearUserState(companyId, phone);
+          await this.resetConversation(companyId, phone);
+          this.log.info('booking.cancelled_by_customer');
           await this.whatsappService.sendText(
             instance,
             phone,
@@ -630,6 +734,12 @@ export class BookingService {
 
     if (state) {
       await this.redisService.setUserState(companyId, phone, state);
+      if (state.step !== stepBefore) {
+        this.log.info('booking.step_changed', {
+          from: stepBefore,
+          to: state.step,
+        });
+      }
     }
   }
 
@@ -1032,7 +1142,7 @@ export class BookingService {
     state: any,
   ): Promise<boolean> {
     try {
-      this.logger.log(`Creating appointment via API for ${phone}`);
+      this.log.info('booking.creating_appointment');
       const phoneWithoutDDD = phone.replace('55', '9');
 
       let customerId = state.customerId;
@@ -1062,11 +1172,11 @@ export class BookingService {
       await this.whatsappService.sendText(
         instance,
         phone,
-        '✅ *Agendamento Confirmado!*\n\nSeu horário foi reservado com sucesso. Te esperamos lá!',
+        '✅ *Agendamento Confirmado!*\n\nSeu horário foi reservado com sucesso. Te esperamos lá!\n\n_Para um novo agendamento, digite *menu*._',
       );
       return true;
     } catch (error) {
-      this.logger.error(`Error creating appointment: ${error.message}`);
+      this.log.error('booking.create_appointment_failed', error);
       await this.whatsappService.sendText(
         instance,
         phone,

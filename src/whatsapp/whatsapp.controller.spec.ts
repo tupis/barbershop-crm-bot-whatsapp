@@ -11,7 +11,13 @@ function build({ botMessageIds = [] as string[], paused = false } = {}) {
     pausedCalls: [] as { phone: string; seconds: number }[],
   };
 
+  const seen = new Set<string>();
   const redis: any = {
+    claimMessage: async (_i: string, id: string) => {
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    },
     wasSentByBot: async (_i: string, id: string) => botMessageIds.includes(id),
     pauseAutomation: async (_i: string, phone: string, seconds: number) => {
       store.paused.set(phone, seconds);
@@ -153,5 +159,89 @@ describe('WhatsappController — handover ao atendente', () => {
     );
 
     expect(handled[0]).toMatchObject({ text: 'Corte', rowId: 'srv_1' });
+  });
+
+  describe('protecao contra disparos repetidos', () => {
+    it('responde uma unica vez ao mesmo id entregue de novo', async () => {
+      const { controller, handled } = build();
+
+      await controller.handleWebhook(upsert());
+      const again: any = await controller.handleWebhook(upsert());
+
+      expect(handled).toHaveLength(1);
+      expect(again.status).toBe('success');
+    });
+
+    it.each([
+      ['grupo', { key: { remoteJid: '120363000000@g.us' } }],
+      ['status', { key: { remoteJid: 'status@broadcast' } }],
+      ['newsletter', { key: { remoteJid: '1203@newsletter' } }],
+      ['lid sem numero real', { key: { remoteJid: '123456789@lid' } }],
+    ])('ignora mensagem de %s', async (_label, over) => {
+      const { controller, handled } = build();
+      await controller.handleWebhook(upsert(over));
+      expect(handled).toHaveLength(0);
+    });
+
+    it('usa o numero real quando o remetente vem como @lid', async () => {
+      const { controller, handled } = build();
+      await controller.handleWebhook(
+        upsert({
+          key: {
+            remoteJid: '123456789@lid',
+            remoteJidAlt: '5511977776666@s.whatsapp.net',
+          },
+        }),
+      );
+      expect(handled[0]).toMatchObject({ phone: '5511977776666' });
+    });
+
+    it.each([
+      ['reacao', { reactionMessage: { text: '👍' } }],
+      ['protocolo (apagar/editar)', { protocolMessage: { type: 0 } }],
+      ['figurinha', { stickerMessage: {} }],
+    ])('ignora %s', async (_label, message) => {
+      const { controller, handled } = build();
+      const payload: any = upsert();
+      payload.data.message = message;
+      await controller.handleWebhook(payload);
+      expect(handled).toHaveLength(0);
+    });
+
+    it('ignora avisos do sistema (chamada perdida, aguardando mensagem)', async () => {
+      const { controller, handled } = build();
+      const payload: any = upsert();
+      payload.data.messageStubType = 2;
+      payload.data.message = undefined;
+      await controller.handleWebhook(payload);
+      expect(handled).toHaveLength(0);
+    });
+
+    it('nao responde mensagem antiga reentregue (reconexao/backlog)', async () => {
+      const { controller, handled } = build();
+      const payload: any = upsert();
+      payload.data.messageTimestamp = Math.floor(Date.now() / 1000) - 3 * 3600;
+      await controller.handleWebhook(payload);
+      expect(handled).toHaveLength(0);
+    });
+
+    it('responde mensagem recente', async () => {
+      const { controller, handled } = build();
+      const payload: any = upsert();
+      payload.data.messageTimestamp = String(Math.floor(Date.now() / 1000) - 5);
+      await controller.handleWebhook(payload);
+      expect(handled).toHaveLength(1);
+    });
+
+    it('devolve 2xx mesmo quando o fluxo quebra, para a Evolution nao reenviar', async () => {
+      const { controller } = build();
+      (controller as any).bookingService = {
+        handleIncomingMessage: async () => {
+          throw new Error('backend fora');
+        },
+      };
+      const res: any = await controller.handleWebhook(upsert());
+      expect(res.status).toBe('error');
+    });
   });
 });
